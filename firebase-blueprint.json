@@ -1,0 +1,259 @@
+{
+  "entities": {
+    "ParentAccount": {
+      "title": "ParentAccount",
+      "description": "Root parent account document owning learner profiles, progress, and reading positions.",
+      "type": "object",
+      "properties": {
+        "parentId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the parent."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Parent display label."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": ["parentId", "displayName", "createdAt", "updatedAt"]
+    },
+    "LearnerProfile": {
+      "title": "LearnerProfile",
+      "description": "Child learner profile with independent multilingual locale preferences.",
+      "type": "object",
+      "properties": {
+        "learnerId": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "parentId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "nickname": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "ageYears": {
+          "type": "integer"
+        },
+        "avatarTone": {
+          "type": "string",
+          "enum": ["sky", "amber", "emerald", "rose"],
+          "maxLength": 16
+        },
+        "interfaceLocale": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 10
+        },
+        "learningLocale": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 10
+        },
+        "explanationLocale": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 10
+        },
+        "narrationLocale": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 10
+        },
+        "reducedMotion": {
+          "type": "boolean"
+        },
+        "dailyMinutesLimit": {
+          "type": "integer"
+        },
+        "audioSpeed": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "learnerId",
+        "parentId",
+        "nickname",
+        "ageYears",
+        "avatarTone",
+        "interfaceLocale",
+        "learningLocale",
+        "explanationLocale",
+        "narrationLocale",
+        "reducedMotion",
+        "dailyMinutesLimit",
+        "audioSpeed",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LessonProgress": {
+      "title": "LessonProgress",
+      "description": "Checkpoint progress record keyed by learner, lesson, locale, and experience mode.",
+      "type": "object",
+      "properties": {
+        "progressId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "parentId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "learnerId": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "lessonId": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "learningLocale": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 10
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["guided", "flashcards", "listening", "game", "story", "explore"],
+          "maxLength": 16
+        },
+        "completedActivityIds": {
+          "type": "array"
+        },
+        "totalActivities": {
+          "type": "integer"
+        },
+        "lastActivityIndex": {
+          "type": "integer"
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "progressId",
+        "parentId",
+        "learnerId",
+        "lessonId",
+        "learningLocale",
+        "mode",
+        "completedActivityIds",
+        "totalActivities",
+        "lastActivityIndex",
+        "completed",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StoryPosition": {
+      "title": "StoryPosition",
+      "description": "Saved reading position per learner and story.",
+      "type": "object",
+      "properties": {
+        "positionId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "parentId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "learnerId": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "storyId": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "narrationLocale": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 10
+        },
+        "segmentIndex": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "positionId",
+        "parentId",
+        "learnerId",
+        "storyId",
+        "narrationLocale",
+        "segmentIndex",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/parents/{parentId}": {
+      "schema": { "$ref": "#/entities/ParentAccount" },
+      "description": "Authenticated parent root documents."
+    },
+    "/parents/{parentId}/learners/{learnerId}": {
+      "schema": { "$ref": "#/entities/LearnerProfile" },
+      "description": "Child profiles owned by a parent account."
+    },
+    "/parents/{parentId}/progress/{progressId}": {
+      "schema": { "$ref": "#/entities/LessonProgress" },
+      "description": "Per-learner lesson progress checkpoints owned by a parent account."
+    },
+    "/parents/{parentId}/storyPositions/{positionId}": {
+      "schema": { "$ref": "#/entities/StoryPosition" },
+      "description": "Per-learner story reading positions owned by a parent account."
+    }
+  }
+}

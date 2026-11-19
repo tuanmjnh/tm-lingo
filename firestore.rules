@@ -1,0 +1,352 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Primitive helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidShortId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidLocale(code) {
+      return code is string && code.size() >= 2 && code.size() <= 10 && code.matches('^[a-zA-Z\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isVerifiedOwner(parentId) {
+      return isVerifiedUser() && request.auth.uid == parentId;
+    }
+
+    function parentExists(parentId) {
+      return exists(/databases/$(database)/documents/parents/$(parentId));
+    }
+
+    function isValidParentAccount(data, parentId) {
+      return data.keys().hasAll(['parentId', 'displayName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['parentId', 'displayName', 'createdAt', 'updatedAt'])
+        && data.parentId == request.auth.uid
+        && data.parentId == parentId
+        && isValidId(data.parentId)
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 80
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLearnerProfile(data, parentId, learnerId) {
+      return data.keys().hasAll([
+          'learnerId',
+          'parentId',
+          'nickname',
+          'ageYears',
+          'avatarTone',
+          'interfaceLocale',
+          'learningLocale',
+          'explanationLocale',
+          'narrationLocale',
+          'reducedMotion',
+          'dailyMinutesLimit',
+          'audioSpeed',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'learnerId',
+          'parentId',
+          'nickname',
+          'ageYears',
+          'avatarTone',
+          'interfaceLocale',
+          'learningLocale',
+          'explanationLocale',
+          'narrationLocale',
+          'reducedMotion',
+          'dailyMinutesLimit',
+          'audioSpeed',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.parentId == request.auth.uid
+        && data.parentId == parentId
+        && data.learnerId == learnerId
+        && isValidShortId(data.learnerId)
+        && data.nickname is string
+        && data.nickname.size() >= 1
+        && data.nickname.size() <= 32
+        && data.ageYears is int
+        && data.ageYears >= 3
+        && data.ageYears <= 5
+        && data.avatarTone is string
+        && data.avatarTone.size() <= 16
+        && data.avatarTone in ['sky', 'amber', 'emerald', 'rose']
+        && isValidLocale(data.interfaceLocale)
+        && isValidLocale(data.learningLocale)
+        && isValidLocale(data.explanationLocale)
+        && isValidLocale(data.narrationLocale)
+        && data.reducedMotion is bool
+        && data.dailyMinutesLimit is int
+        && data.dailyMinutesLimit >= 5
+        && data.dailyMinutesLimit <= 60
+        && (data.audioSpeed is float || data.audioSpeed is int)
+        && data.audioSpeed >= 0.65
+        && data.audioSpeed <= 1.25
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLessonProgress(data, parentId, progressId) {
+      return data.keys().hasAll([
+          'progressId',
+          'parentId',
+          'learnerId',
+          'lessonId',
+          'learningLocale',
+          'mode',
+          'completedActivityIds',
+          'totalActivities',
+          'lastActivityIndex',
+          'completed',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'progressId',
+          'parentId',
+          'learnerId',
+          'lessonId',
+          'learningLocale',
+          'mode',
+          'completedActivityIds',
+          'totalActivities',
+          'lastActivityIndex',
+          'completed',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.parentId == request.auth.uid
+        && data.parentId == parentId
+        && data.progressId == progressId
+        && isValidId(data.progressId)
+        && isValidShortId(data.learnerId)
+        && isValidShortId(data.lessonId)
+        && isValidLocale(data.learningLocale)
+        && data.mode is string
+        && data.mode.size() <= 16
+        && data.mode in ['guided', 'flashcards', 'listening', 'game', 'story', 'explore']
+        && data.completedActivityIds is list
+        && data.completedActivityIds.size() <= 20
+        && (data.completedActivityIds.size() == 0 || (data.completedActivityIds[0] is string && data.completedActivityIds[0].size() <= 64))
+        && data.totalActivities is int
+        && data.totalActivities >= 1
+        && data.totalActivities <= 50
+        && data.lastActivityIndex is int
+        && data.lastActivityIndex >= 0
+        && data.lastActivityIndex <= 50
+        && data.completed is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStoryPosition(data, parentId, positionId) {
+      return data.keys().hasAll([
+          'positionId',
+          'parentId',
+          'learnerId',
+          'storyId',
+          'narrationLocale',
+          'segmentIndex',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'positionId',
+          'parentId',
+          'learnerId',
+          'storyId',
+          'narrationLocale',
+          'segmentIndex',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.parentId == request.auth.uid
+        && data.parentId == parentId
+        && data.positionId == positionId
+        && isValidId(data.positionId)
+        && isValidShortId(data.learnerId)
+        && isValidShortId(data.storyId)
+        && isValidLocale(data.narrationLocale)
+        && data.segmentIndex is int
+        && data.segmentIndex >= 0
+        && data.segmentIndex <= 100
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /parents/{parentId} {
+      allow get: if isVerifiedOwner(parentId) && isValidId(parentId);
+      allow list: if false;
+      allow create: if isVerifiedOwner(parentId)
+        && isValidId(parentId)
+        && isValidParentAccount(incoming(), parentId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedOwner(parentId)
+        && isValidId(parentId)
+        && isValidParentAccount(incoming(), parentId)
+        && incoming().parentId == existing().parentId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt']);
+      allow delete: if isVerifiedOwner(parentId) && isValidId(parentId);
+
+      match /learners/{learnerId} {
+        allow get: if isVerifiedOwner(parentId)
+          && isValidId(parentId)
+          && isValidShortId(learnerId)
+          && parentExists(parentId);
+        allow list: if isVerifiedOwner(parentId)
+          && resource.data.parentId == request.auth.uid;
+        allow create: if isVerifiedOwner(parentId)
+          && isValidId(parentId)
+          && isValidShortId(learnerId)
+          && isValidLearnerProfile(incoming(), parentId, learnerId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && parentExists(parentId);
+        allow update: if isVerifiedOwner(parentId)
+          && isValidId(parentId)
+          && isValidShortId(learnerId)
+          && isValidLearnerProfile(incoming(), parentId, learnerId)
+          && incoming().parentId == existing().parentId
+          && incoming().learnerId == existing().learnerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'interfaceLocale',
+              'learningLocale',
+              'explanationLocale',
+              'narrationLocale',
+              'reducedMotion',
+              'dailyMinutesLimit',
+              'audioSpeed',
+              'updatedAt'
+            ])
+            || incoming().diff(existing()).affectedKeys().hasOnly([
+              'nickname',
+              'ageYears',
+              'avatarTone',
+              'updatedAt'
+            ])
+          )
+          && parentExists(parentId);
+        allow delete: if isVerifiedOwner(parentId)
+          && isValidId(parentId)
+          && isValidShortId(learnerId)
+          && parentExists(parentId);
+      }
+
+      match /progress/{progressId} {
+        allow get: if isVerifiedOwner(parentId)
+          && isValidId(parentId)
+          && isValidId(progressId)
+          && parentExists(parentId);
+        allow list: if isVerifiedOwner(parentId)
+          && resource.data.parentId == request.auth.uid;
+        allow create: if isVerifiedOwner(parentId)
+          && isValidId(parentId)
+          && isValidId(progressId)
+          && isValidLessonProgress(incoming(), parentId, progressId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && parentExists(parentId)
+          && exists(/databases/$(database)/documents/parents/$(parentId)/learners/$(incoming().learnerId));
+        allow update: if isVerifiedOwner(parentId)
+          && isValidId(parentId)
+          && isValidId(progressId)
+          && isValidLessonProgress(incoming(), parentId, progressId)
+          && incoming().parentId == existing().parentId
+          && incoming().progressId == existing().progressId
+          && incoming().learnerId == existing().learnerId
+          && incoming().lessonId == existing().lessonId
+          && incoming().learningLocale == existing().learningLocale
+          && incoming().mode == existing().mode
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'completedActivityIds',
+            'totalActivities',
+            'lastActivityIndex',
+            'completed',
+            'updatedAt'
+          ])
+          && parentExists(parentId);
+        allow delete: if isVerifiedOwner(parentId)
+          && isValidId(parentId)
+          && isValidId(progressId)
+          && parentExists(parentId);
+      }
+
+      match /storyPositions/{positionId} {
+        allow get: if isVerifiedOwner(parentId)
+          && isValidId(parentId)
+          && isValidId(positionId)
+          && parentExists(parentId);
+        allow list: if isVerifiedOwner(parentId)
+          && resource.data.parentId == request.auth.uid;
+        allow create: if isVerifiedOwner(parentId)
+          && isValidId(parentId)
+          && isValidId(positionId)
+          && isValidStoryPosition(incoming(), parentId, positionId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && parentExists(parentId)
+          && exists(/databases/$(database)/documents/parents/$(parentId)/learners/$(incoming().learnerId));
+        allow update: if isVerifiedOwner(parentId)
+          && isValidId(parentId)
+          && isValidId(positionId)
+          && isValidStoryPosition(incoming(), parentId, positionId)
+          && incoming().parentId == existing().parentId
+          && incoming().positionId == existing().positionId
+          && incoming().learnerId == existing().learnerId
+          && incoming().storyId == existing().storyId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'narrationLocale',
+            'segmentIndex',
+            'updatedAt'
+          ])
+          && parentExists(parentId);
+        allow delete: if isVerifiedOwner(parentId)
+          && isValidId(parentId)
+          && isValidId(positionId)
+          && parentExists(parentId);
+      }
+    }
+  }
+}
