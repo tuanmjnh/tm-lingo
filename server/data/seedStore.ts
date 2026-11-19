@@ -12,6 +12,7 @@ import type {
   VocabularyConcept,
   VoiceProfile,
 } from '../../packages/contracts/types.ts';
+import { getMongoCollection } from '../db/mongo.ts';
 
 export const LANGUAGE_REGISTRY: LocaleConfig[] = [
   {
@@ -333,34 +334,50 @@ const ANSWER_KEYS: Record<string, string> = {
 
 const DEFAULT_PARENT_ID = 'parent-demo-01';
 
-export class InMemoryLingoStore {
+function buildStarterLearner(parentAccountId: string): LearnerProfile {
+  const now = new Date().toISOString();
+  const suffix =
+    parentAccountId === DEFAULT_PARENT_ID
+      ? 'min'
+      : parentAccountId.slice(0, 8);
+  return {
+    id: `learner-${suffix}`,
+    schemaVersion: 1,
+    parentAccountId,
+    nickname: 'Bé Min',
+    ageYears: 4,
+    ageBand: '3-5',
+    avatarTone: 'sky',
+    preferences: {
+      interfaceLocale: 'vi',
+      learningLocale: 'en',
+      explanationLocale: 'vi',
+      narrationLocale: 'en',
+      reducedMotion: false,
+      dailyMinutesLimit: 15,
+      audioSpeed: 0.9,
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+interface StoredProgressDoc extends LessonProgressRecord {
+  parentAccountId: string;
+}
+
+interface StoredStoryPositionDoc extends StoryReadingPosition {
+  parentAccountId: string;
+}
+
+export class LingoRepository {
   private learners: Map<string, LearnerProfile> = new Map();
-  private progress: Map<string, LessonProgressRecord> = new Map();
-  private storyPositions: Map<string, StoryReadingPosition> = new Map();
+  private progress: Map<string, StoredProgressDoc> = new Map();
+  private storyPositions: Map<string, StoredStoryPositionDoc> = new Map();
 
   constructor() {
-    const now = new Date().toISOString();
-    const starterLearner: LearnerProfile = {
-      id: 'learner-min',
-      schemaVersion: 1,
-      parentAccountId: DEFAULT_PARENT_ID,
-      nickname: 'Bé Min',
-      ageYears: 4,
-      ageBand: '3-5',
-      avatarTone: 'sky',
-      preferences: {
-        interfaceLocale: 'vi',
-        learningLocale: 'en',
-        explanationLocale: 'vi',
-        narrationLocale: 'en',
-        reducedMotion: false,
-        dailyMinutesLimit: 15,
-        audioSpeed: 0.9,
-      },
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.learners.set(starterLearner.id, starterLearner);
+    const starter = buildStarterLearner(DEFAULT_PARENT_ID);
+    this.learners.set(starter.id, starter);
   }
 
   getLanguages(): LocaleConfig[] {
@@ -380,29 +397,55 @@ export class InMemoryLingoStore {
     );
   }
 
-  listLearners(): LearnerProfile[] {
-    return Array.from(this.learners.values());
+  async listLearners(parentAccountId = DEFAULT_PARENT_ID): Promise<LearnerProfile[]> {
+    const col = await getMongoCollection<LearnerProfile>('learners');
+    if (col) {
+      const existing = await col
+        .find({ parentAccountId }, { projection: { _id: 0 } })
+        .sort({ createdAt: 1 })
+        .toArray();
+
+      if (existing.length > 0) {
+        return existing;
+      }
+
+      const starter = buildStarterLearner(parentAccountId);
+      await col.updateOne(
+        { id: starter.id },
+        { $setOnInsert: starter },
+        { upsert: true }
+      );
+      return [starter];
+    }
+
+    const local = Array.from(this.learners.values()).filter(
+      (l) => l.parentAccountId === parentAccountId
+    );
+    if (local.length > 0) return local;
+
+    const starter = buildStarterLearner(parentAccountId);
+    this.learners.set(starter.id, starter);
+    return [starter];
   }
 
-  getLearner(learnerId: string): LearnerProfile | undefined {
-    return this.learners.get(learnerId);
-  }
-
-  createLearner(input: {
-    nickname: string;
-    ageYears: number;
-    avatarTone: LearnerProfile['avatarTone'];
-    interfaceLocale: string;
-    learningLocale: string;
-    explanationLocale: string;
-    narrationLocale: string;
-  }): LearnerProfile {
+  async createLearner(
+    parentAccountId: string,
+    input: {
+      nickname: string;
+      ageYears: number;
+      avatarTone: LearnerProfile['avatarTone'];
+      interfaceLocale: string;
+      learningLocale: string;
+      explanationLocale: string;
+      narrationLocale: string;
+    }
+  ): Promise<LearnerProfile> {
     const now = new Date().toISOString();
-    const id = `learner-${Date.now().toString(36)}`;
+    const id = `learner-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
     const profile: LearnerProfile = {
       id,
       schemaVersion: 1,
-      parentAccountId: DEFAULT_PARENT_ID,
+      parentAccountId,
       nickname: input.nickname.trim(),
       ageYears: input.ageYears,
       ageBand: '3-5',
@@ -419,16 +462,46 @@ export class InMemoryLingoStore {
       createdAt: now,
       updatedAt: now,
     };
+
     this.learners.set(id, profile);
+    const col = await getMongoCollection<LearnerProfile>('learners');
+    if (col) {
+      await col.insertOne({ ...profile });
+    }
     return profile;
   }
 
-  updateLearnerPreferences(
+  async updateLearnerPreferences(
+    parentAccountId: string,
     learnerId: string,
     patch: Partial<LearnerProfile['preferences']>
-  ): LearnerProfile | undefined {
+  ): Promise<LearnerProfile | undefined> {
+    const col = await getMongoCollection<LearnerProfile>('learners');
+    if (col) {
+      const existing = await col.findOne(
+        { id: learnerId, parentAccountId },
+        { projection: { _id: 0 } }
+      );
+      if (!existing) return undefined;
+
+      const updated: LearnerProfile = {
+        ...existing,
+        preferences: {
+          ...existing.preferences,
+          ...patch,
+        },
+        updatedAt: new Date().toISOString(),
+      };
+      await col.updateOne(
+        { id: learnerId, parentAccountId },
+        { $set: { preferences: updated.preferences, updatedAt: updated.updatedAt } }
+      );
+      this.learners.set(learnerId, updated);
+      return updated;
+    }
+
     const existing = this.learners.get(learnerId);
-    if (!existing) return undefined;
+    if (!existing || existing.parentAccountId !== parentAccountId) return undefined;
     const updated: LearnerProfile = {
       ...existing,
       preferences: {
@@ -672,7 +745,6 @@ export class InMemoryLingoStore {
 
     const expectedConceptId = ANSWER_KEYS[input.activityId];
     if (!expectedConceptId) {
-      // Flashcards or open activities always succeed gently
       return {
         activityId: input.activityId,
         correct: true,
@@ -700,17 +772,50 @@ export class InMemoryLingoStore {
     };
   }
 
-  getProgressForLearner(learnerId: string): LessonProgressRecord[] {
-    return Array.from(this.progress.values()).filter((p) => p.learnerId === learnerId);
+  async getProgressForLearner(
+    parentAccountId: string,
+    learnerId: string
+  ): Promise<LessonProgressRecord[]> {
+    const col = await getMongoCollection<StoredProgressDoc>('lesson_progress');
+    if (col) {
+      const docs = await col
+        .find({ parentAccountId, learnerId }, { projection: { _id: 0, parentAccountId: 0 } })
+        .sort({ updatedAt: -1 })
+        .toArray();
+      return docs as LessonProgressRecord[];
+    }
+
+    return Array.from(this.progress.values())
+      .filter((p) => p.parentAccountId === parentAccountId && p.learnerId === learnerId)
+      .map(({ parentAccountId: _ignored, ...rest }) => rest);
   }
 
-  saveProgress(record: Omit<LessonProgressRecord, 'updatedAt'>): LessonProgressRecord {
-    const key = `${record.learnerId}::${record.lessonId}::${record.learningLocale}::${record.mode}`;
+  async saveProgress(
+    parentAccountId: string,
+    record: Omit<LessonProgressRecord, 'updatedAt'>
+  ): Promise<LessonProgressRecord> {
     const saved: LessonProgressRecord = {
       ...record,
       updatedAt: new Date().toISOString(),
     };
-    this.progress.set(key, saved);
+    const key = `${parentAccountId}::${record.learnerId}::${record.lessonId}::${record.learningLocale}::${record.mode}`;
+    this.progress.set(key, { ...saved, parentAccountId });
+
+    const col = await getMongoCollection<StoredProgressDoc>('lesson_progress');
+    if (col) {
+      await col.updateOne(
+        {
+          parentAccountId,
+          learnerId: record.learnerId,
+          lessonId: record.lessonId,
+          learningLocale: record.learningLocale,
+          mode: record.mode,
+        },
+        { $set: { ...saved, parentAccountId } },
+        { upsert: true }
+      );
+    }
+
     return saved;
   }
 
@@ -722,23 +827,57 @@ export class InMemoryLingoStore {
     return STORIES.find((s) => s.id === storyId);
   }
 
-  getStoryPosition(learnerId: string, storyId: string): StoryReadingPosition | null {
-    return this.storyPositions.get(`${learnerId}::${storyId}`) ?? null;
+  async getStoryPosition(
+    parentAccountId: string,
+    learnerId: string,
+    storyId: string
+  ): Promise<StoryReadingPosition | null> {
+    const col = await getMongoCollection<StoredStoryPositionDoc>('story_positions');
+    if (col) {
+      const doc = await col.findOne(
+        { parentAccountId, learnerId, storyId },
+        { projection: { _id: 0, parentAccountId: 0 } }
+      );
+      return (doc as StoryReadingPosition | null) ?? null;
+    }
+
+    const found = this.storyPositions.get(
+      `${parentAccountId}::${learnerId}::${storyId}`
+    );
+    if (!found) return null;
+    const { parentAccountId: _ignored, ...rest } = found;
+    return rest;
   }
 
-  saveStoryPosition(input: {
-    learnerId: string;
-    storyId: string;
-    narrationLocale: string;
-    segmentIndex: number;
-  }): StoryReadingPosition {
+  async saveStoryPosition(
+    parentAccountId: string,
+    input: {
+      learnerId: string;
+      storyId: string;
+      narrationLocale: string;
+      segmentIndex: number;
+    }
+  ): Promise<StoryReadingPosition> {
     const pos: StoryReadingPosition = {
       ...input,
       updatedAt: new Date().toISOString(),
     };
-    this.storyPositions.set(`${input.learnerId}::${input.storyId}`, pos);
+    this.storyPositions.set(
+      `${parentAccountId}::${input.learnerId}::${input.storyId}`,
+      { ...pos, parentAccountId }
+    );
+
+    const col = await getMongoCollection<StoredStoryPositionDoc>('story_positions');
+    if (col) {
+      await col.updateOne(
+        { parentAccountId, learnerId: input.learnerId, storyId: input.storyId },
+        { $set: { ...pos, parentAccountId } },
+        { upsert: true }
+      );
+    }
     return pos;
   }
 }
 
-export const lingoStore = new InMemoryLingoStore();
+export const lingoStore = new LingoRepository();
+

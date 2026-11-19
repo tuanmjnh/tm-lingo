@@ -253,3 +253,36 @@ export interface NotificationDeliveryLog {
   sentAt: string;
 }
 
+export type UserRole = 'parent' | 'teacher' | 'admin';
+
+export interface AuthUserProfile {
+  id: string;
+  email: string | null;
+  displayName: string | null;
+  role: UserRole;
+  provider: 'supabase';
+}
+
+export interface ManagedUserRecord {
+  userId: string;
+  email: string;
+  displayName: string | null;
+  role: UserRole;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MediaAssetRecord {
+  id: string;
+  parentAccountId: string;
+  title: string;
+  kind: 'image' | 'audio';
+  locale: string;
+  mimeType: string;
+  sizeBytes: number;
+  storageBucket: string;
+  storagePath: string;
+  publicUrl: string;
+  createdAt: string;
+}
+

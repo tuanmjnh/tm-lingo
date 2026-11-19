@@ -17,7 +17,6 @@ import type {
   PushSubscriptionSummary,
 } from '../../../packages/contracts/types';
 import { apiClient } from '../../shared/apiClient';
-import { requestFcmWebPushToken } from '../../firebase';
 import {
   getPushSupportState,
   showLocalPreviewNotification,
@@ -29,6 +28,7 @@ import { useOnlineStatus } from '../../hooks/useOnlineStatus';
 
 interface NotificationManagerProps {
   interfaceLocale: string;
+  embedded?: boolean;
 }
 
 const ALL_CATEGORIES: NotificationCategory[] = [
@@ -40,6 +40,7 @@ const ALL_CATEGORIES: NotificationCategory[] = [
 
 export function NotificationManager({
   interfaceLocale,
+  embedded = false,
 }: NotificationManagerProps) {
   const isVi = interfaceLocale === 'vi';
   const isOnline = useOnlineStatus();
@@ -256,8 +257,6 @@ export function NotificationManager({
     try {
       const { publicKey } = await apiClient.getVapidPublicKey();
       const subscription = await subscribeBrowserToPush(publicKey);
-      // If user configured VITE_FIREBASE_VAPID_KEY in .env, also warm up FCM token
-      await requestFcmWebPushToken().catch(() => null);
       await apiClient.subscribePush({
         subscription,
         deviceLabel: deviceLabel.trim() || 'Parent browser',
@@ -310,18 +309,20 @@ export function NotificationManager({
 
   return (
     <div className="space-y-8">
-      <div className="max-w-3xl space-y-2">
-        <h1 className="text-3xl font-bold text-slate-900">
-          {isVi
-            ? 'Quản trị thông báo & PWA Push'
-            : 'Notification management & PWA Push'}
-        </h1>
-        <p className="text-base text-slate-600 leading-relaxed">
-          {isVi
-            ? 'Soạn thảo, lên lịch và gửi thông báo nhẹ nhàng cho phụ huynh (không gây áp lực điểm số cho trẻ), đồng thời quản lý cài đặt PWA và thiết bị nhận Web Push.'
-            : 'Compose, schedule, and dispatch gentle parent notifications without pressuring children, while managing PWA installation and Web Push devices.'}
-        </p>
-      </div>
+      {!embedded && (
+        <div className="max-w-3xl space-y-2">
+          <h1 className="text-3xl font-bold text-slate-900">
+            {isVi
+              ? 'Quản trị thông báo & PWA Push'
+              : 'Notification management & PWA Push'}
+          </h1>
+          <p className="text-base text-slate-600 leading-relaxed">
+            {isVi
+              ? 'Soạn thảo, lên lịch và gửi thông báo nhẹ nhàng cho phụ huynh (không gây áp lực điểm số cho trẻ), đồng thời quản lý cài đặt PWA và thiết bị nhận Web Push.'
+              : 'Compose, schedule, and dispatch gentle parent notifications without pressuring children, while managing PWA installation and Web Push devices.'}
+          </p>
+        </div>
+      )}
 
       {notice && (
         <div
@@ -699,15 +700,11 @@ export function NotificationManager({
                 </dd>
               </div>
               <div className="py-2.5 flex items-center justify-between gap-4">
-                <dt className="text-slate-600">FCM Web Push Key</dt>
+                <dt className="text-slate-600">
+                  {isVi ? 'Kênh Push' : 'Push protocol'}
+                </dt>
                 <dd className="font-semibold text-slate-900">
-                  {import.meta.env.VITE_FIREBASE_VAPID_KEY
-                    ? isVi
-                      ? 'Đã cấu hình'
-                      : 'Configured'
-                    : isVi
-                      ? 'Đang dùng W3C VAPID'
-                      : 'Using W3C VAPID'}
+                  W3C Web Push (VAPID)
                 </dd>
               </div>
             </dl>

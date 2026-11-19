@@ -1,11 +1,14 @@
 import type {
   ActivityAnswerResponse,
+  AuthUserProfile,
   ExperienceMode,
   LearnerPreferences,
   LearnerProfile,
   LearningPackageSummary,
   LessonProgressRecord,
   LocaleConfig,
+  ManagedUserRecord,
+  MediaAssetRecord,
   NotificationCampaign,
   NotificationCategory,
   NotificationDeliveryLog,
@@ -14,13 +17,29 @@ import type {
   ResolvedLessonPayload,
   StoryBook,
   StoryReadingPosition,
+  UserRole,
   VoiceProfile,
 } from '../../packages/contracts/types';
+import { getSupabaseAccessToken } from '../lib/supabase';
+
+async function buildAuthHeaders(extra?: HeadersInit): Promise<Headers> {
+  const headers = new Headers(extra);
+  const token = await getSupabaseAccessToken();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  return headers;
+}
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const headers = await buildAuthHeaders(init?.headers);
+  if (!(init?.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     ...init,
+    headers,
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -30,6 +49,9 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const apiClient = {
+  getCurrentUser: () =>
+    apiFetch<{ user: AuthUserProfile | null }>('/api/v1/auth/me'),
+
   getLanguages: () => apiFetch<{ languages: LocaleConfig[] }>('/api/v1/languages'),
 
   getVoices: (locale?: string) => {
@@ -154,9 +176,34 @@ export const apiClient = {
       }
     ),
 
+  listMedia: () =>
+    apiFetch<{ assets: MediaAssetRecord[]; bucket: string }>('/api/v1/media'),
+
+  uploadMedia: (payload: { file: File; title: string; locale: string }) => {
+    const form = new FormData();
+    form.append('file', payload.file);
+    form.append('title', payload.title);
+    form.append('locale', payload.locale);
+    return apiFetch<{ asset: MediaAssetRecord }>('/api/v1/media/upload', {
+      method: 'POST',
+      body: form,
+    });
+  },
+
+  deleteMedia: (assetId: string) =>
+    apiFetch<{ removed: boolean }>(
+      `/api/v1/media/${encodeURIComponent(assetId)}`,
+      { method: 'DELETE' }
+    ),
+
   getVapidPublicKey: () =>
     apiFetch<{ publicKey: string; configured: boolean }>(
       '/api/v1/notifications/vapid-public-key'
+    ),
+
+  getNotificationInbox: () =>
+    apiFetch<{ notifications: NotificationCampaign[] }>(
+      '/api/v1/notifications/inbox'
     ),
 
   getPushSubscriptions: () =>
@@ -240,5 +287,17 @@ export const apiClient = {
     }>(
       `/api/v1/notifications/campaigns/${encodeURIComponent(campaignId)}/send`,
       { method: 'POST' }
+    ),
+
+  listAdminUsers: () =>
+    apiFetch<{ users: ManagedUserRecord[] }>('/api/v1/admin/users'),
+
+  updateUserRole: (userId: string, role: UserRole) =>
+    apiFetch<{ user: ManagedUserRecord }>(
+      `/api/v1/admin/users/${encodeURIComponent(userId)}/role`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ role }),
+      }
     ),
 };

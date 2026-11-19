@@ -1,57 +1,75 @@
 import { useCallback, useEffect, useState } from 'react';
-import {
-  onAuthStateChanged,
-  signInWithPopup,
-  signOut,
-  type User,
-} from 'firebase/auth';
+import { Globe } from 'lucide-react';
+import type { User } from '@supabase/supabase-js';
 import type {
+  AuthUserProfile,
   ExperienceMode,
   LearnerPreferences,
   LearnerProfile,
   LessonProgressRecord,
   LocaleConfig,
+  MediaAssetRecord,
 } from '../packages/contracts/types';
-import { auth, googleProvider } from './firebase';
+import { isSupabaseConfigured, supabase } from './lib/supabase';
 import { apiClient } from './shared/apiClient';
-import {
-  createFirestoreLearner,
-  ensureParentAccount,
-  seedStarterLearnerIfEmpty,
-  subscribeLearners,
-  subscribeProgress,
-  updateFirestoreLearnerPreferences,
-} from './shared/firestoreService';
 import { getUiMessages } from './i18n/messages';
 import { AssetImage } from './components/AssetImage';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
+import { NotificationBell } from './components/NotificationBell';
 import { LessonPlayer } from './features/lesson-player/LessonPlayer';
 import { StoryReader } from './features/story-reader/StoryReader';
 import { ParentPanel } from './features/parent/ParentPanel';
-import { NotificationManager } from './features/notifications/NotificationManager';
+import {
+  AdminWorkspace,
+  type AdminSection,
+} from './features/admin/AdminWorkspace';
+import { AdminLoginView } from './features/admin/AdminLoginView';
 
-type AppTab = 'learn' | 'stories' | 'notifications' | 'parents';
+type AppTab = 'learn' | 'stories' | 'parents' | 'admin';
 
 function getInitialTab(): AppTab {
   if (typeof window === 'undefined') return 'learn';
   const param = new URLSearchParams(window.location.search).get('tab');
-  if (
-    param === 'stories' ||
-    param === 'notifications' ||
-    param === 'parents'
-  ) {
+  if (param === 'stories' || param === 'parents' || param === 'admin') {
     return param;
   }
   return 'learn';
 }
 
+function mapSupabaseUser(user: User | null): AuthUserProfile | null {
+  if (!user) return null;
+  const meta = user.user_metadata as Record<string, unknown> | undefined;
+  const appMeta = user.app_metadata as Record<string, unknown> | undefined;
+  const rawRole = appMeta?.role;
+  const role =
+    rawRole === 'admin' || rawRole === 'teacher' || rawRole === 'parent'
+      ? rawRole
+      : 'parent';
+  const displayName =
+    typeof meta?.full_name === 'string' && meta.full_name.trim()
+      ? meta.full_name.trim()
+      : typeof meta?.name === 'string' && meta.name.trim()
+        ? meta.name.trim()
+        : user.email ?? null;
+  return {
+    id: user.id,
+    email: user.email ?? null,
+    displayName,
+    role,
+    provider: 'supabase',
+  };
+}
+
 export function App() {
   const [activeTab, setActiveTab] = useState<AppTab>(getInitialTab);
-  const [authUser, setAuthUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState(false);
+  const [adminSection, setAdminSection] =
+    useState<AdminSection>('notifications');
+  const [authUser, setAuthUser] = useState<AuthUserProfile | null>(null);
+  const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
 
   const [languages, setLanguages] = useState<LocaleConfig[]>([]);
   const [learners, setLearners] = useState<LearnerProfile[]>([]);
@@ -59,20 +77,118 @@ export function App() {
   const [progressRecords, setProgressRecords] = useState<LessonProgressRecord[]>(
     []
   );
+  const [mediaAssets, setMediaAssets] = useState<MediaAssetRecord[]>([]);
   const [experienceMode, setExperienceMode] =
     useState<ExperienceMode>('guided');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setAuthUser(user);
-      setAuthReady(true);
-    });
-    return unsubscribe;
+  const syncServerUser = useCallback(async (fallbackUser: User | null) => {
+    if (!fallbackUser) {
+      setAuthUser(null);
+      return;
+    }
+    const optimistic = mapSupabaseUser(fallbackUser);
+    setAuthUser(optimistic);
+    try {
+      const res = await apiClient.getCurrentUser();
+      if (res.user) {
+        setAuthUser(res.user);
+      }
+    } catch {
+      // Keep optimistic parent fallback if network temporarily fails
+    }
   }, []);
 
-  const loadLocalBootstrap = useCallback(async () => {
+  // Subscribe to Supabase Auth session state and verify server-authoritative role
+  useEffect(() => {
+    if (!supabase) {
+      setAuthReady(true);
+      return;
+    }
+
+    let mounted = true;
+    supabase.auth
+      .getSession()
+      .then(async ({ data }) => {
+        if (!mounted) return;
+        await syncServerUser(data.session?.user ?? null);
+        if (mounted) setAuthReady(true);
+      })
+      .catch(() => {
+        if (mounted) setAuthReady(true);
+      });
+
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        void syncServerUser(session?.user ?? null).finally(() => {
+          if (mounted) setAuthReady(true);
+        });
+      }
+    );
+
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, [syncServerUser]);
+
+  // Listen for popup OAuth callback messages from /auth/callback
+  useEffect(() => {
+    const client = supabase;
+    if (!client) return;
+    const handleMessage = async (event: MessageEvent) => {
+      const origin = event.origin;
+      if (
+        origin !== window.location.origin &&
+        !origin.endsWith('.run.app') &&
+        !origin.includes('localhost')
+      ) {
+        return;
+      }
+      const data = event.data as {
+        type?: string;
+        code?: string | null;
+        accessToken?: string | null;
+        refreshToken?: string | null;
+        error?: string | null;
+      } | null;
+      if (!data || data.type !== 'SUPABASE_OAUTH_CALLBACK') return;
+
+      setAuthBusy(true);
+      setAuthError(null);
+      setAuthNotice(null);
+      try {
+        if (data.error) {
+          throw new Error(data.error);
+        }
+        if (data.code) {
+          const { error: exchangeErr } =
+            await client.auth.exchangeCodeForSession(data.code);
+          if (exchangeErr) throw exchangeErr;
+        } else if (data.accessToken && data.refreshToken) {
+          const { error: sessionErr } = await client.auth.setSession({
+            access_token: data.accessToken,
+            refresh_token: data.refreshToken,
+          });
+          if (sessionErr) throw sessionErr;
+        }
+      } catch (err) {
+        setAuthError(
+          err instanceof Error ? err.message : 'Google sign-in failed'
+        );
+      } finally {
+        setAuthBusy(false);
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  const isStaff = authUser?.role === 'admin' || authUser?.role === 'teacher';
+
+  const loadBootstrapData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -81,11 +197,13 @@ export function App() {
         apiClient.getLearners(),
       ]);
       setLanguages(langRes.languages);
-      if (!authUser) {
-        setLearners(learnerRes.learners);
-        if (learnerRes.learners.length > 0) {
-          setActiveLearnerId((prev) => prev || learnerRes.learners[0].id);
-        }
+      setLearners(learnerRes.learners);
+      if (learnerRes.learners.length > 0) {
+        setActiveLearnerId((prev) =>
+          learnerRes.learners.some((l) => l.id === prev)
+            ? prev
+            : learnerRes.learners[0].id
+        );
       }
     } catch (err) {
       setError(
@@ -94,111 +212,182 @@ export function App() {
     } finally {
       setLoading(false);
     }
-  }, [authUser]);
+  }, []);
 
   useEffect(() => {
     if (authReady) {
-      void loadLocalBootstrap();
+      void loadBootstrapData();
     }
-  }, [authReady, loadLocalBootstrap]);
+  }, [authReady, authUser?.id, loadBootstrapData]);
 
-  // Attach Firestore learners listener ONLY when authenticated
+  // Load system media library ONLY for authenticated staff (Admin / Teacher)
   useEffect(() => {
-    if (!authReady || !authUser) return;
-
-    let unsubLearners: (() => void) | null = null;
-    let cancelled = false;
-
-    const initCloudSync = async () => {
-      try {
-        await ensureParentAccount(
-          authUser.uid,
-          authUser.displayName ?? authUser.email ?? 'Parent'
-        );
-        await seedStarterLearnerIfEmpty(authUser.uid);
-        if (cancelled) return;
-        unsubLearners = subscribeLearners(authUser.uid, (cloudLearners) => {
-          setLearners(cloudLearners);
-          if (cloudLearners.length > 0) {
-            setActiveLearnerId((prev) =>
-              cloudLearners.some((l) => l.id === prev)
-                ? prev
-                : cloudLearners[0].id
-            );
-          }
-        });
-      } catch (err) {
-        if (!cancelled) {
-          setAuthError(
-            err instanceof Error ? err.message : 'Cloud sync initialization failed'
-          );
-        }
-      }
-    };
-
-    void initCloudSync();
-
+    if (!authReady || !isStaff) {
+      setMediaAssets([]);
+      return;
+    }
+    let active = true;
+    apiClient
+      .listMedia()
+      .then((res) => {
+        if (active) setMediaAssets(res.assets);
+      })
+      .catch(() => {
+        if (active) setMediaAssets([]);
+      });
     return () => {
-      cancelled = true;
-      unsubLearners?.();
+      active = false;
     };
-  }, [authReady, authUser]);
+  }, [authReady, isStaff, authUser?.id]);
 
-  const refreshLocalProgress = useCallback(async (learnerId: string) => {
-    if (!learnerId || authUser) return;
+  const refreshProgress = useCallback(async (learnerId: string) => {
+    if (!learnerId) return;
     try {
       const res = await apiClient.getProgress(learnerId);
       setProgressRecords(res.progress);
     } catch {
       // non-blocking
     }
-  }, [authUser]);
+  }, []);
 
-  // Attach Firestore progress listener when signed in, or load local progress when guest
   useEffect(() => {
     if (!activeLearnerId) return;
-    if (authUser) {
-      return subscribeProgress(authUser.uid, activeLearnerId, (records) => {
-        setProgressRecords(records);
-      });
-    }
-    void refreshLocalProgress(activeLearnerId);
-    return undefined;
-  }, [authUser, activeLearnerId, refreshLocalProgress]);
+    void refreshProgress(activeLearnerId);
+  }, [activeLearnerId, authUser?.id, refreshProgress]);
 
   const activeLearner =
     learners.find((l) => l.id === activeLearnerId) ?? learners[0] ?? null;
 
-  const messages = getUiMessages(
-    activeLearner?.preferences.interfaceLocale ?? 'vi'
-  );
+  const uiLocales = languages.filter((l) => l.enabled && l.uiEnabled);
+  const currentInterfaceLocale =
+    activeLearner?.preferences.interfaceLocale ?? 'vi';
+  const messages = getUiMessages(currentInterfaceLocale);
 
   useEffect(() => {
-    if (activeLearner?.preferences.interfaceLocale) {
-      document.documentElement.lang = activeLearner.preferences.interfaceLocale;
-    }
-  }, [activeLearner?.preferences.interfaceLocale]);
+    document.documentElement.lang = currentInterfaceLocale;
+  }, [currentInterfaceLocale]);
 
   const handleSignInGoogle = async () => {
+    if (!supabase) {
+      setAuthError('Supabase Auth is not configured.');
+      return;
+    }
     setAuthBusy(true);
     setAuthError(null);
+    setAuthNotice(null);
     try {
-      await signInWithPopup(auth, googleProvider);
+      const redirectTo = `${window.location.origin}/auth/callback`;
+      const { data, error: oauthErr } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo,
+          skipBrowserRedirect: true,
+          queryParams: {
+            prompt: 'select_account',
+          },
+        },
+      });
+      if (oauthErr) throw oauthErr;
+      if (!data?.url) {
+        throw new Error('Could not initialize Google sign-in URL.');
+      }
+
+      const width = 520;
+      const height = 640;
+      const left = Math.max(0, window.screenX + (window.outerWidth - width) / 2);
+      const top = Math.max(0, window.screenY + (window.outerHeight - height) / 2);
+      const popup = window.open(
+        data.url,
+        'tm_lingo_google_oauth',
+        `width=${width},height=${height},left=${Math.round(left)},top=${Math.round(top)},resizable=yes,scrollbars=yes`
+      );
+      if (!popup) {
+        setAuthError(
+          currentInterfaceLocale === 'vi'
+            ? 'Trình duyệt đang chặn cửa sổ bật lên (popup). Hãy cho phép popup rồi thử lại.'
+            : 'Popup was blocked by your browser. Please allow popups and try again.'
+        );
+        setAuthBusy(false);
+        return;
+      }
+
+      const pollTimer = window.setInterval(() => {
+        if (popup.closed) {
+          window.clearInterval(pollTimer);
+          setAuthBusy(false);
+        }
+      }, 600);
     } catch (err) {
       setAuthError(
-        err instanceof Error ? err.message : 'Google sign-in was cancelled'
+        err instanceof Error ? err.message : 'Google sign-in failed'
       );
+      setAuthBusy(false);
+    }
+  };
+
+  const handleSignInEmail = async (email: string, password: string) => {
+    if (!supabase) {
+      setAuthError('Supabase Auth is not configured.');
+      return;
+    }
+    setAuthBusy(true);
+    setAuthError(null);
+    setAuthNotice(null);
+    try {
+      const { error: signInErr } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (signInErr) throw signInErr;
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Sign-in failed');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleSignUpEmail = async (
+    email: string,
+    password: string,
+    displayName: string
+  ) => {
+    if (!supabase) {
+      setAuthError('Supabase Auth is not configured.');
+      return;
+    }
+    setAuthBusy(true);
+    setAuthError(null);
+    setAuthNotice(null);
+    try {
+      const { data, error: signUpErr } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          data: {
+            full_name: displayName.trim() || email.split('@')[0],
+          },
+        },
+      });
+      if (signUpErr) throw signUpErr;
+      if (!data.session) {
+        setAuthNotice(messages.parent.signUpCheckEmail);
+      }
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Sign-up failed');
     } finally {
       setAuthBusy(false);
     }
   };
 
   const handleSignOut = async () => {
+    if (!supabase) return;
     setAuthBusy(true);
     setAuthError(null);
+    setAuthNotice(null);
     try {
-      await signOut(auth);
+      await supabase.auth.signOut();
       setProgressRecords([]);
+      setMediaAssets([]);
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : 'Sign-out failed');
     } finally {
@@ -208,14 +397,13 @@ export function App() {
 
   const handleUpdatePreferences = async (patch: Partial<LearnerPreferences>) => {
     if (!activeLearner) return;
-    if (authUser) {
-      await updateFirestoreLearnerPreferences(
-        authUser.uid,
-        activeLearner.id,
-        patch
-      );
-      return;
-    }
+    setLearners((prev) =>
+      prev.map((l) =>
+        l.id === activeLearner.id
+          ? { ...l, preferences: { ...l.preferences, ...patch } }
+          : l
+      )
+    );
     const res = await apiClient.updateLearnerPreferences(activeLearner.id, patch);
     setLearners((prev) =>
       prev.map((l) => (l.id === res.learner.id ? res.learner : l))
@@ -234,21 +422,26 @@ export function App() {
       narrationLocale: activeLearner?.preferences.narrationLocale ?? 'en',
     };
 
-    if (authUser) {
-      const newId = await createFirestoreLearner(authUser.uid, {
-        ...payload,
-        ...basePrefs,
-      });
-      setActiveLearnerId(newId);
-      return;
-    }
-
     const res = await apiClient.createLearner({
       ...payload,
       ...basePrefs,
     });
     setLearners((prev) => [...prev, res.learner]);
     setActiveLearnerId(res.learner.id);
+  };
+
+  const handleUploadMedia = async (payload: {
+    file: File;
+    title: string;
+    locale: string;
+  }) => {
+    const res = await apiClient.uploadMedia(payload);
+    setMediaAssets((prev) => [res.asset, ...prev]);
+  };
+
+  const handleDeleteMedia = async (assetId: string) => {
+    await apiClient.deleteMedia(assetId);
+    setMediaAssets((prev) => prev.filter((item) => item.id !== assetId));
   };
 
   const getLocaleName = (code: string) => {
@@ -265,15 +458,33 @@ export function App() {
     }, 50);
   };
 
+  const openAdmin = (section: AdminSection = 'notifications') => {
+    setAdminSection(section);
+    setActiveTab('admin');
+  };
+
+  const navItems: Array<[AppTab, string]> = isStaff
+    ? [
+        ['learn', messages.nav.learn],
+        ['stories', messages.nav.stories],
+        ['parents', messages.nav.parents],
+        ['admin', messages.nav.admin],
+      ]
+    : [
+        ['learn', messages.nav.learn],
+        ['stories', messages.nav.stories],
+        ['parents', messages.nav.parents],
+      ];
+
   return (
     <div
       className={`min-h-screen flex flex-col bg-[#F8FAFC] text-[#0F172A] ${
         activeLearner?.preferences.reducedMotion ? 'reduced-motion' : ''
       }`}
     >
-      {/* Top Bar Contract: 3 clean zones separated by gap-8 */}
+      {/* Clean 3-zone Top Bar: Brand — Focused Nav — Actions (Bell only when signed in, VI/EN, Primary CTA) */}
       <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-slate-200">
-        <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-8">
+        <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-6">
           <button
             type="button"
             onClick={() => setActiveTab('learn')}
@@ -286,14 +497,7 @@ export function App() {
             aria-label="Primary navigation"
             className="flex items-center gap-6 text-sm font-medium text-slate-600"
           >
-            {(
-              [
-                ['learn', messages.nav.learn],
-                ['stories', messages.nav.stories],
-                ['notifications', messages.nav.notifications],
-                ['parents', messages.nav.parents],
-              ] as const
-            ).map(([tabKey, label]) => {
+            {navItems.map(([tabKey, label]) => {
               const isActive = activeTab === tabKey;
               return (
                 <button
@@ -312,7 +516,59 @@ export function App() {
             })}
           </nav>
 
-          <div className="shrink-0">
+          <div className="flex items-center gap-2.5 shrink-0">
+            {/* Notification Bell Icon: shown ONLY when signed in */}
+            {authUser && (
+              <NotificationBell
+                userId={authUser.id}
+                isStaff={isStaff}
+                interfaceLocale={currentInterfaceLocale}
+                onNavigateTab={setActiveTab}
+                onOpenAdminNotifications={() => openAdmin('notifications')}
+              />
+            )}
+
+            {/* Compact Display Language Switcher (interfaceLocale only) */}
+            <div
+              className="inline-flex items-center rounded-xl border border-slate-200 bg-slate-50 p-0.5"
+              role="group"
+              aria-label={messages.nav.languageSwitchLabel}
+            >
+              <Globe
+                className="w-3.5 h-3.5 text-slate-400 mx-1.5 hidden sm:block"
+                aria-hidden="true"
+              />
+              {(uiLocales.length > 0
+                ? uiLocales
+                : [
+                    { locale: 'vi', nativeName: 'Tiếng Việt' },
+                    { locale: 'en', nativeName: 'English' },
+                  ]
+              ).map((loc) => {
+                const isSelected = currentInterfaceLocale === loc.locale;
+                return (
+                  <button
+                    key={loc.locale}
+                    type="button"
+                    onClick={() =>
+                      void handleUpdatePreferences({
+                        interfaceLocale: loc.locale,
+                      })
+                    }
+                    title={loc.nativeName}
+                    aria-pressed={isSelected}
+                    className={`px-2 py-1.5 min-h-[32px] rounded-lg text-xs font-semibold uppercase tracking-wide transition-colors cursor-pointer ${
+                      isSelected
+                        ? 'bg-white text-slate-900 shadow-xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    {loc.locale}
+                  </button>
+                );
+              })}
+            </div>
+
             <button
               type="button"
               onClick={scrollToLessonStage}
@@ -336,7 +592,7 @@ export function App() {
             </p>
             <button
               type="button"
-              onClick={() => void loadLocalBootstrap()}
+              onClick={() => void loadBootstrapData()}
               className="px-4 py-2 rounded-xl bg-slate-900 text-white text-sm font-semibold cursor-pointer"
             >
               Retry
@@ -370,7 +626,7 @@ export function App() {
                       <span>{messages.hero.ageBand}</span>
                     </div>
 
-                    <h1 className="text-4xl sm:text-5xl font-bold tracking-tight text-slate-900 leading-[1.12]">
+                    <h1 className="text-4xl sm:text-5xl font-bold tracking-tight text-slate-900 leading-[1.12] [text-wrap:balance]">
                       {messages.hero.greeting}, {activeLearner.nickname}!
                     </h1>
 
@@ -412,14 +668,13 @@ export function App() {
 
                 <div id="lesson-stage" className="scroll-mt-24">
                   <LessonPlayer
-                    parentUid={authUser?.uid ?? null}
                     learner={activeLearner}
                     mode={experienceMode}
                     messages={messages}
                     onModeChange={setExperienceMode}
                     onOpenStory={() => setActiveTab('stories')}
                     onProgressUpdated={() =>
-                      void refreshLocalProgress(activeLearner.id)
+                      void refreshProgress(activeLearner.id)
                     }
                   />
                 </div>
@@ -428,34 +683,23 @@ export function App() {
 
             {activeTab === 'stories' && (
               <StoryReader
-                parentUid={authUser?.uid ?? null}
                 learner={activeLearner}
                 languages={languages}
                 messages={messages}
               />
             )}
 
-            {activeTab === 'notifications' && (
-              <NotificationManager
-                interfaceLocale={activeLearner.preferences.interfaceLocale}
-              />
-            )}
-
             {activeTab === 'parents' && (
               <ParentPanel
-                authUser={
-                  authUser
-                    ? {
-                        uid: authUser.uid,
-                        displayName: authUser.displayName,
-                        email: authUser.email,
-                      }
-                    : null
-                }
+                authUser={authUser}
                 authBusy={authBusy}
                 authError={authError}
+                authNotice={authNotice}
                 onSignInGoogle={handleSignInGoogle}
+                onSignInEmail={handleSignInEmail}
+                onSignUpEmail={handleSignUpEmail}
                 onSignOut={handleSignOut}
+                onOpenAdmin={() => openAdmin('notifications')}
                 learners={learners}
                 activeLearner={activeLearner}
                 languages={languages}
@@ -466,6 +710,31 @@ export function App() {
                 onUpdatePreferences={handleUpdatePreferences}
               />
             )}
+
+            {activeTab === 'admin' &&
+              (authUser && isStaff ? (
+                <AdminWorkspace
+                  authUser={authUser}
+                  interfaceLocale={currentInterfaceLocale}
+                  activeLearningLocale={activeLearner.preferences.learningLocale}
+                  initialSection={adminSection}
+                  languages={languages}
+                  mediaAssets={mediaAssets}
+                  messages={messages}
+                  onUploadMedia={handleUploadMedia}
+                  onDeleteMedia={handleDeleteMedia}
+                />
+              ) : (
+                <AdminLoginView
+                  authUser={authUser}
+                  authBusy={authBusy}
+                  authError={authError}
+                  interfaceLocale={currentInterfaceLocale}
+                  onSignInEmail={handleSignInEmail}
+                  onSignOut={handleSignOut}
+                  onBackToLearn={() => setActiveTab('learn')}
+                />
+              ))}
           </>
         )}
       </main>
@@ -473,10 +742,20 @@ export function App() {
       <footer className="border-t border-slate-200 bg-white mt-12">
         <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500">
           <span>TM-Lingo · Multilingual Early Language Learning (Ages 3–5)</span>
-          <span>
-            Interface: {activeLearner?.preferences.interfaceLocale ?? 'vi'} ·
-            Learning: {activeLearner?.preferences.learningLocale ?? 'en'}
-          </span>
+          <div className="flex flex-wrap items-center gap-4">
+            <span>
+              Interface: {activeLearner?.preferences.interfaceLocale ?? 'vi'} ·
+              Learning: {activeLearner?.preferences.learningLocale ?? 'en'}
+            </span>
+            <span aria-hidden="true">·</span>
+            <button
+              type="button"
+              onClick={() => openAdmin('notifications')}
+              className="font-medium text-slate-600 hover:text-sky-700 transition-colors cursor-pointer"
+            >
+              {messages.footer.adminPortal}
+            </button>
+          </div>
         </div>
       </footer>
 

@@ -13,22 +13,16 @@ import type {
 } from '../../../packages/contracts/types';
 import type { UiMessages } from '../../i18n/messages';
 import { apiClient } from '../../shared/apiClient';
-import {
-  getFirestoreStoryPosition,
-  saveFirestoreStoryPosition,
-} from '../../shared/firestoreService';
 import { speakText, stopSpeaking } from '../../audio/speechPlayer';
 import { AssetImage } from '../../components/AssetImage';
 
 interface StoryReaderProps {
-  parentUid: string | null;
   learner: LearnerProfile;
   languages: LocaleConfig[];
   messages: UiMessages;
 }
 
 export function StoryReader({
-  parentUid,
   learner,
   languages,
   messages,
@@ -54,25 +48,15 @@ export function StoryReader({
     let cancelled = false;
     apiClient
       .getStory('story-fruit-market', learner.id)
-      .then(async (res) => {
+      .then((res) => {
         if (cancelled) return;
         setStory(res.story);
-        if (parentUid) {
-          const cloudPos = await getFirestoreStoryPosition(
-            parentUid,
-            learner.id,
-            res.story.id
-          ).catch(() => null);
-          if (!cancelled && cloudPos) {
-            setSegmentIndex(
-              Math.min(cloudPos.segmentIndex, res.story.segments.length - 1)
-            );
-            return;
-          }
-        }
         if (res.readingPosition) {
           setSegmentIndex(
-            Math.min(res.readingPosition.segmentIndex, res.story.segments.length - 1)
+            Math.min(
+              res.readingPosition.segmentIndex,
+              res.story.segments.length - 1
+            )
           );
         }
       })
@@ -82,7 +66,7 @@ export function StoryReader({
       cancelled = true;
       stopSpeaking();
     };
-  }, [learner.id, parentUid]);
+  }, [learner.id]);
 
   // Fetch voices filtered strictly by narrationLocale from server Voice Registry
   useEffect(() => {
@@ -125,20 +109,11 @@ export function StoryReader({
 
   const persistPosition = async (nextIndex: number, nextLocale: string) => {
     try {
-      if (parentUid) {
-        await saveFirestoreStoryPosition(parentUid, {
-          learnerId: learner.id,
-          storyId: story.id,
-          narrationLocale: nextLocale,
-          segmentIndex: nextIndex,
-        });
-      } else {
-        await apiClient.saveStoryPosition(story.id, {
-          learnerId: learner.id,
-          narrationLocale: nextLocale,
-          segmentIndex: nextIndex,
-        });
-      }
+      await apiClient.saveStoryPosition(story.id, {
+        learnerId: learner.id,
+        narrationLocale: nextLocale,
+        segmentIndex: nextIndex,
+      });
       setSavedNotice(true);
       setTimeout(() => setSavedNotice(false), 2000);
     } catch {

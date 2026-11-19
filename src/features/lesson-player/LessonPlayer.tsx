@@ -16,12 +16,10 @@ import type {
 } from '../../../packages/contracts/types';
 import type { UiMessages } from '../../i18n/messages';
 import { apiClient } from '../../shared/apiClient';
-import { saveFirestoreProgress } from '../../shared/firestoreService';
 import { speakText, stopSpeaking } from '../../audio/speechPlayer';
 import { RENDERER_REGISTRY } from '../../experiences/renderers/ActivityRenderers';
 
 interface LessonPlayerProps {
-  parentUid: string | null;
   learner: LearnerProfile;
   mode: ExperienceMode;
   messages: UiMessages;
@@ -38,7 +36,6 @@ const PLAYABLE_MODES: ExperienceMode[] = [
 ];
 
 export function LessonPlayer({
-  parentUid,
   learner,
   mode,
   messages,
@@ -106,28 +103,15 @@ export function LessonPlayer({
   ) => {
     if (!lesson) return;
     try {
-      if (parentUid) {
-        await saveFirestoreProgress(parentUid, {
-          learnerId: learner.id,
-          lessonId: lesson.lessonId,
-          learningLocale: lesson.learningLocale,
-          mode: lesson.mode,
-          completedActivityIds: nextCompletedIds,
-          totalActivities: lesson.activities.length,
-          lastActivityIndex: nextIndex,
-          completed: isDone,
-        });
-      } else {
-        await apiClient.saveProgress(lesson.lessonId, {
-          learnerId: learner.id,
-          learningLocale: lesson.learningLocale,
-          mode: lesson.mode,
-          completedActivityIds: nextCompletedIds,
-          totalActivities: lesson.activities.length,
-          lastActivityIndex: nextIndex,
-          completed: isDone,
-        });
-      }
+      await apiClient.saveProgress(lesson.lessonId, {
+        learnerId: learner.id,
+        learningLocale: lesson.learningLocale,
+        mode: lesson.mode,
+        completedActivityIds: nextCompletedIds,
+        totalActivities: lesson.activities.length,
+        lastActivityIndex: nextIndex,
+        completed: isDone,
+      });
       setCheckpointSavedAt(new Date().toLocaleTimeString());
       onProgressUpdated();
     } catch {

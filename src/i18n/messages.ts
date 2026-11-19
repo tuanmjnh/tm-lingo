@@ -2,9 +2,10 @@ export interface UiMessages {
   nav: {
     learn: string;
     stories: string;
-    notifications: string;
     parents: string;
+    admin: string;
     startLesson: string;
+    languageSwitchLabel: string;
   };
   hero: {
     greeting: string;
@@ -88,8 +89,35 @@ export interface UiMessages {
     accountHeading: string;
     accountGuestNote: string;
     accountSignedInNote: string;
+    emailLabel: string;
+    passwordLabel: string;
+    displayNameLabel: string;
+    signInTab: string;
+    signUpTab: string;
+    signInButton: string;
+    signUpButton: string;
     signInGoogle: string;
+    orWithEmail: string;
     signOutButton: string;
+    signUpCheckEmail: string;
+    mediaHeading: string;
+    mediaSubtitle: string;
+    mediaSignInHint: string;
+    mediaTitleLabel: string;
+    mediaFileLabel: string;
+    mediaUploadButton: string;
+    mediaUploading: string;
+    mediaEmpty: string;
+    mediaDelete: string;
+    openAdminTitle: string;
+    openAdminDesc: string;
+    openAdminButton: string;
+    roleParent: string;
+    roleTeacher: string;
+    roleAdmin: string;
+  };
+  footer: {
+    adminPortal: string;
   };
 }
 
@@ -97,9 +125,10 @@ const VI_MESSAGES: UiMessages = {
   nav: {
     learn: 'Học bài',
     stories: 'Truyện kể',
-    notifications: 'Thông báo',
     parents: 'Phụ huynh',
+    admin: 'Quản trị',
     startLesson: 'Bắt đầu học',
+    languageSwitchLabel: 'Ngôn ngữ hiển thị',
   },
   hero: {
     greeting: 'Chào bé',
@@ -185,12 +214,42 @@ const VI_MESSAGES: UiMessages = {
     statusReady: 'Sẵn sàng',
     statusPlanned: 'Đang phát triển',
     savedNotice: 'Đã lưu cài đặt',
-    accountHeading: 'Tài khoản phụ huynh & đồng bộ đám mây',
+    accountHeading: 'Tài khoản phụ huynh (Supabase Auth)',
     accountGuestNote:
-      'Bạn đang ở chế độ dùng thử cục bộ. Đăng nhập Google để lưu hồ sơ bé, cài đặt ngôn ngữ và tiến độ học lên Firebase Firestore.',
-    accountSignedInNote: 'Đang đồng bộ trực tiếp với Firebase Firestore.',
-    signInGoogle: 'Đăng nhập bằng Google',
+      'Đăng nhập hoặc tạo tài khoản phụ huynh để lưu hồ sơ bé, đồng bộ tiến độ học lên MongoDB và nhận thông báo nhắc học.',
+    accountSignedInNote: 'Đã đăng nhập · Hồ sơ & tiến độ đang lưu trực tiếp trên MongoDB.',
+    emailLabel: 'Email phụ huynh',
+    passwordLabel: 'Mật khẩu (tối thiểu 6 ký tự)',
+    displayNameLabel: 'Tên hiển thị',
+    signInTab: 'Đăng nhập',
+    signUpTab: 'Đăng ký mới',
+    signInButton: 'Đăng nhập',
+    signUpButton: 'Tạo tài khoản',
+    signInGoogle: 'Đăng nhập nhanh bằng Google',
+    orWithEmail: 'hoặc dùng email & mật khẩu',
     signOutButton: 'Đăng xuất',
+    signUpCheckEmail:
+      'Đã tạo tài khoản! Nếu Supabase bật xác minh email, vui lòng kiểm tra hộp thư để kích hoạt rồi đăng nhập.',
+    mediaHeading: 'Thư viện học liệu hệ thống (Supabase Storage)',
+    mediaSubtitle:
+      'Quản trị viên và giáo viên tải lên tranh minh họa, file thu âm giọng đọc cho kho bài học chung (tối đa 10MB).',
+    mediaSignInHint: 'Chỉ tài khoản Quản trị viên hoặc Giáo viên mới có quyền quản lý học liệu.',
+    mediaTitleLabel: 'Tên học liệu',
+    mediaFileLabel: 'Chọn ảnh (PNG/JPG/WEBP) hoặc âm thanh (MP3/WAV/M4A)',
+    mediaUploadButton: 'Tải lên',
+    mediaUploading: 'Đang tải lên...',
+    mediaEmpty: 'Chưa có học liệu nào được tải lên.',
+    mediaDelete: 'Xóa',
+    openAdminTitle: 'Bộ quản trị hệ thống',
+    openAdminDesc:
+      'Quản lý nội dung học liệu Supabase Storage, chiến dịch thông báo Web Push, Language Registry và phân quyền.',
+    openAdminButton: 'Mở quản trị hệ thống',
+    roleParent: 'Phụ huynh',
+    roleTeacher: 'Giáo viên',
+    roleAdmin: 'Quản trị viên',
+  },
+  footer: {
+    adminPortal: 'Cổng quản trị',
   },
 };
 
@@ -198,9 +257,10 @@ const EN_MESSAGES: UiMessages = {
   nav: {
     learn: 'Learn',
     stories: 'Stories',
-    notifications: 'Notifications',
     parents: 'Parents',
+    admin: 'Admin',
     startLesson: 'Start Lesson',
+    languageSwitchLabel: 'Display language',
   },
   hero: {
     greeting: 'Hello',
@@ -286,12 +346,42 @@ const EN_MESSAGES: UiMessages = {
     statusReady: 'Ready',
     statusPlanned: 'Planned',
     savedNotice: 'Settings saved',
-    accountHeading: 'Parent account & cloud sync',
+    accountHeading: 'Parent account (Supabase Auth)',
     accountGuestNote:
-      'You are in local preview mode. Sign in with Google to persist learner profiles, locale settings, and progress to Firebase Firestore.',
-    accountSignedInNote: 'Synced live with Firebase Firestore.',
-    signInGoogle: 'Sign in with Google',
+      'Sign in or create a parent account to save learner profiles, sync progress to MongoDB, and receive study reminders.',
+    accountSignedInNote: 'Signed in · Profiles and progress sync directly to MongoDB.',
+    emailLabel: 'Parent email',
+    passwordLabel: 'Password (min 6 characters)',
+    displayNameLabel: 'Display name',
+    signInTab: 'Sign in',
+    signUpTab: 'Create account',
+    signInButton: 'Sign in',
+    signUpButton: 'Create account',
+    signInGoogle: 'Continue with Google',
+    orWithEmail: 'or use email & password',
     signOutButton: 'Sign out',
+    signUpCheckEmail:
+      'Account created! If email confirmation is enabled in Supabase, please check your inbox before signing in.',
+    mediaHeading: 'System Learning Media Library (Supabase Storage)',
+    mediaSubtitle:
+      'Administrators and teachers upload curriculum illustrations and narration audio for shared lessons (up to 10MB).',
+    mediaSignInHint: 'Only Administrator or Teacher accounts can manage system learning media.',
+    mediaTitleLabel: 'Asset title',
+    mediaFileLabel: 'Choose image (PNG/JPG/WEBP) or audio (MP3/WAV/M4A)',
+    mediaUploadButton: 'Upload',
+    mediaUploading: 'Uploading...',
+    mediaEmpty: 'No custom media uploaded yet.',
+    mediaDelete: 'Delete',
+    openAdminTitle: 'System Administration',
+    openAdminDesc:
+      'Manage Supabase Storage curriculum media, Web Push campaigns, Language Registry, and staff roles.',
+    openAdminButton: 'Open System Admin',
+    roleParent: 'Parent',
+    roleTeacher: 'Teacher',
+    roleAdmin: 'Administrator',
+  },
+  footer: {
+    adminPortal: 'Admin Portal',
   },
 };
 

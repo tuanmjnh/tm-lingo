@@ -1,9 +1,35 @@
 import express from 'express';
+import multer from 'multer';
 import { z } from 'zod';
 import { lingoStore } from '../data/seedStore.ts';
 import { getRuntimeEnvironmentSummary } from '../config/env.ts';
+import { getMongoStatus } from '../db/mongo.ts';
+import {
+  attachSupabaseUser,
+  requireAdminRole,
+  requireStaffRole,
+  requireSupabaseAuth,
+} from '../auth/supabaseAuth.ts';
+import {
+  getAdminSeedStatus,
+  listManagedUsers,
+  setManagedUserRole,
+} from '../auth/roleStore.ts';
 import { notificationService } from '../modules/notifications.ts';
+import {
+  deleteLearningMedia,
+  getStorageBucketName,
+  listLearningMedia,
+  uploadLearningMedia,
+} from '../modules/storage.ts';
 import type { ExperienceMode } from '../../packages/contracts/types.ts';
+
+const GUEST_PARENT_ID = 'parent-demo-01';
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 const createLearnerSchema = z.object({
   nickname: z.string().min(1).max(32),
@@ -94,16 +120,37 @@ const createCampaignSchema = z.object({
 
 const patchCampaignSchema = createCampaignSchema.partial();
 
+const updateUserRoleSchema = z.object({
+  role: z.enum(['parent', 'teacher', 'admin']),
+});
+
 export function createV1Router() {
   const router = express.Router();
 
+  // Attach verified Supabase user on every API request when Bearer JWT is provided
+  router.use(attachSupabaseUser);
+
+  const resolveParentId = (req: express.Request) =>
+    req.authUser?.id ?? GUEST_PARENT_ID;
+
   router.get('/health', (_req, res) => {
+    const mongo = getMongoStatus();
+    const adminSeed = getAdminSeedStatus();
     res.json({
       status: 'ok',
       service: 'tm-lingo-api',
-      environment: getRuntimeEnvironmentSummary(),
+      environment: getRuntimeEnvironmentSummary({
+        connected: mongo.connected,
+        lastError: mongo.lastError,
+      }),
+      adminSeeded: adminSeed.ready,
+      storageBucket: getStorageBucketName(),
       timestamp: new Date().toISOString(),
     });
+  });
+
+  router.get('/auth/me', (req, res) => {
+    res.json({ user: req.authUser ?? null });
   });
 
   router.get('/languages', (_req, res) => {
@@ -115,25 +162,33 @@ export function createV1Router() {
     res.json({ voices: lingoStore.getVoices(locale) });
   });
 
-  router.get('/learners', (_req, res) => {
-    res.json({ learners: lingoStore.listLearners() });
+  router.get('/learners', async (req, res) => {
+    const learners = await lingoStore.listLearners(resolveParentId(req));
+    res.json({ learners });
   });
 
-  router.post('/learners', (req, res) => {
+  router.post('/learners', async (req, res) => {
     const parsed = createLearnerSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Invalid learner profile data' });
     }
-    const created = lingoStore.createLearner(parsed.data);
+    const created = await lingoStore.createLearner(
+      resolveParentId(req),
+      parsed.data
+    );
     return res.status(201).json({ learner: created });
   });
 
-  router.patch('/learners/:learnerId/preferences', (req, res) => {
+  router.patch('/learners/:learnerId/preferences', async (req, res) => {
     const parsed = patchPreferencesSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Invalid preferences update' });
     }
-    const updated = lingoStore.updateLearnerPreferences(req.params.learnerId, parsed.data);
+    const updated = await lingoStore.updateLearnerPreferences(
+      resolveParentId(req),
+      req.params.learnerId,
+      parsed.data
+    );
     if (!updated) {
       return res.status(404).json({ error: 'Learner not found' });
     }
@@ -190,20 +245,24 @@ export function createV1Router() {
     return res.json(result);
   });
 
-  router.get('/progress', (req, res) => {
+  router.get('/progress', async (req, res) => {
     const learnerId = typeof req.query.learnerId === 'string' ? req.query.learnerId : '';
     if (!learnerId) {
       return res.status(400).json({ error: 'learnerId is required' });
     }
-    return res.json({ progress: lingoStore.getProgressForLearner(learnerId) });
+    const progress = await lingoStore.getProgressForLearner(
+      resolveParentId(req),
+      learnerId
+    );
+    return res.json({ progress });
   });
 
-  router.post('/lessons/:lessonId/progress', (req, res) => {
+  router.post('/lessons/:lessonId/progress', async (req, res) => {
     const parsed = saveProgressSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Invalid progress payload' });
     }
-    const saved = lingoStore.saveProgress({
+    const saved = await lingoStore.saveProgress(resolveParentId(req), {
       ...parsed.data,
       lessonId: req.params.lessonId,
     });
@@ -214,7 +273,7 @@ export function createV1Router() {
     res.json({ stories: lingoStore.listStories() });
   });
 
-  router.get('/stories/:storyId', (req, res) => {
+  router.get('/stories/:storyId', async (req, res) => {
     const story = lingoStore.getStory(req.params.storyId);
     if (!story) {
       return res.status(404).json({ error: 'Story not found' });
@@ -222,24 +281,86 @@ export function createV1Router() {
     const learnerId =
       typeof req.query.learnerId === 'string' ? req.query.learnerId : undefined;
     const readingPosition = learnerId
-      ? lingoStore.getStoryPosition(learnerId, story.id)
+      ? await lingoStore.getStoryPosition(
+          resolveParentId(req),
+          learnerId,
+          story.id
+        )
       : null;
     return res.json({ story, readingPosition });
   });
 
-  router.post('/stories/:storyId/position', (req, res) => {
+  router.post('/stories/:storyId/position', async (req, res) => {
     const parsed = storyPositionSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Invalid reading position payload' });
     }
-    const position = lingoStore.saveStoryPosition({
+    const position = await lingoStore.saveStoryPosition(resolveParentId(req), {
       storyId: req.params.storyId,
       ...parsed.data,
     });
     return res.json({ readingPosition: position });
   });
 
-  // Web Push & Notification Management API
+  // Supabase Storage Curriculum Media Library (Admin & Teacher only for mutations)
+  router.get('/media', requireStaffRole, async (_req, res) => {
+    const assets = await listLearningMedia();
+    res.json({ assets, bucket: getStorageBucketName() });
+  });
+
+  router.post(
+    '/media/upload',
+    requireStaffRole,
+    upload.single('file'),
+    async (req, res) => {
+      if (!req.file) {
+        return res
+          .status(400)
+          .json({ error: 'Please select an image or audio file.' });
+      }
+      const title =
+        typeof req.body?.title === 'string' ? req.body.title.slice(0, 80) : '';
+      const locale =
+        typeof req.body?.locale === 'string'
+          ? req.body.locale.slice(0, 10)
+          : 'en';
+
+      try {
+        const asset = await uploadLearningMedia({
+          parentAccountId: req.authUser!.id,
+          title: title || req.file.originalname,
+          locale,
+          fileBuffer: req.file.buffer,
+          originalName: req.file.originalname,
+          mimeType: req.file.mimetype,
+        });
+        return res.status(201).json({ asset });
+      } catch (err) {
+        return res.status(400).json({
+          error: err instanceof Error ? err.message : 'Media upload failed',
+        });
+      }
+    }
+  );
+
+  router.delete('/media/:assetId', requireStaffRole, async (req, res) => {
+    const removed = await deleteLearningMedia(String(req.params.assetId));
+    if (!removed) {
+      return res.status(404).json({ error: 'Media asset not found' });
+    }
+    return res.json({ removed: true });
+  });
+
+  // Parent/User Notification Inbox (read-only for signed-in users)
+  router.get('/notifications/inbox', requireSupabaseAuth, async (_req, res) => {
+    const campaigns = await notificationService.listCampaigns();
+    const inbox = campaigns
+      .filter((c) => c.status === 'sent' || c.status === 'scheduled')
+      .slice(0, 12);
+    res.json({ notifications: inbox });
+  });
+
+  // Standard W3C Web Push opt-in (available to signed-in users & devices)
   router.get('/notifications/vapid-public-key', (_req, res) => {
     res.json({
       publicKey: notificationService.getPublicKey(),
@@ -247,73 +368,140 @@ export function createV1Router() {
     });
   });
 
-  router.get('/notifications/subscriptions', (_req, res) => {
-    res.json({ subscriptions: notificationService.listSubscriptions() });
-  });
-
-  router.post('/notifications/subscribe', (req, res) => {
+  router.post('/notifications/subscribe', async (req, res) => {
     const parsed = pushSubscribeSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Invalid push subscription payload' });
     }
-    const created = notificationService.subscribe(parsed.data);
+    const created = await notificationService.subscribe(parsed.data);
     return res.status(201).json({ subscription: created });
   });
 
-  router.delete('/notifications/subscriptions/:subscriptionId', (req, res) => {
-    const removed = notificationService.unsubscribe(req.params.subscriptionId);
-    if (!removed) {
-      return res.status(404).json({ error: 'Subscription not found' });
+  // Notification & Push Administration (Admin / Teacher only)
+  router.get(
+    '/notifications/subscriptions',
+    requireStaffRole,
+    async (_req, res) => {
+      const subscriptions = await notificationService.listSubscriptions();
+      res.json({ subscriptions });
     }
-    return res.json({ removed: true });
+  );
+
+  router.delete(
+    '/notifications/subscriptions/:subscriptionId',
+    requireStaffRole,
+    async (req, res) => {
+      const removed = await notificationService.unsubscribe(
+        String(req.params.subscriptionId)
+      );
+      if (!removed) {
+        return res.status(404).json({ error: 'Subscription not found' });
+      }
+      return res.json({ removed: true });
+    }
+  );
+
+  router.get(
+    '/notifications/campaigns',
+    requireStaffRole,
+    async (_req, res) => {
+      const [campaigns, logs] = await Promise.all([
+        notificationService.listCampaigns(),
+        notificationService.listDeliveryLogs(),
+      ]);
+      res.json({ campaigns, logs });
+    }
+  );
+
+  router.post(
+    '/notifications/campaigns',
+    requireStaffRole,
+    async (req, res) => {
+      const parsed = createCampaignSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res
+          .status(400)
+          .json({ error: 'Invalid notification campaign payload' });
+      }
+      const campaign = await notificationService.createCampaign(parsed.data);
+      return res.status(201).json({ campaign });
+    }
+  );
+
+  router.patch(
+    '/notifications/campaigns/:campaignId',
+    requireStaffRole,
+    async (req, res) => {
+      const parsed = patchCampaignSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'Invalid campaign update payload' });
+      }
+      const updated = await notificationService.updateCampaign(
+        String(req.params.campaignId),
+        parsed.data
+      );
+      if (!updated) {
+        return res.status(404).json({ error: 'Campaign not found' });
+      }
+      return res.json({ campaign: updated });
+    }
+  );
+
+  router.delete(
+    '/notifications/campaigns/:campaignId',
+    requireStaffRole,
+    async (req, res) => {
+      const removed = await notificationService.deleteCampaign(
+        String(req.params.campaignId)
+      );
+      if (!removed) {
+        return res.status(404).json({ error: 'Campaign not found' });
+      }
+      return res.json({ removed: true });
+    }
+  );
+
+  router.post(
+    '/notifications/campaigns/:campaignId/send',
+    requireStaffRole,
+    async (req, res) => {
+      const result = await notificationService.sendCampaign(
+        String(req.params.campaignId)
+      );
+      if (!result) {
+        return res.status(404).json({ error: 'Campaign not found' });
+      }
+      return res.json(result);
+    }
+  );
+
+  // Admin-only Account & Role Management
+  router.get('/admin/users', requireAdminRole, async (_req, res) => {
+    const users = await listManagedUsers();
+    res.json({ users });
   });
 
-  router.get('/notifications/campaigns', (_req, res) => {
-    res.json({
-      campaigns: notificationService.listCampaigns(),
-      logs: notificationService.listDeliveryLogs(),
-    });
-  });
-
-  router.post('/notifications/campaigns', (req, res) => {
-    const parsed = createCampaignSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: 'Invalid notification campaign payload' });
+  router.patch(
+    '/admin/users/:userId/role',
+    requireAdminRole,
+    async (req, res) => {
+      const parsed = updateUserRoleSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'Invalid role value' });
+      }
+      const targetUserId = String(req.params.userId);
+      if (targetUserId === req.authUser!.id && parsed.data.role !== 'admin') {
+        return res
+          .status(400)
+          .json({ error: 'Cannot remove admin role from your own active account.' });
+      }
+      const updated = await setManagedUserRole(targetUserId, parsed.data.role);
+      if (!updated) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      return res.json({ user: updated });
     }
-    const campaign = notificationService.createCampaign(parsed.data);
-    return res.status(201).json({ campaign });
-  });
-
-  router.patch('/notifications/campaigns/:campaignId', (req, res) => {
-    const parsed = patchCampaignSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: 'Invalid campaign update payload' });
-    }
-    const updated = notificationService.updateCampaign(
-      req.params.campaignId,
-      parsed.data
-    );
-    if (!updated) {
-      return res.status(404).json({ error: 'Campaign not found' });
-    }
-    return res.json({ campaign: updated });
-  });
-
-  router.delete('/notifications/campaigns/:campaignId', (req, res) => {
-    const removed = notificationService.deleteCampaign(req.params.campaignId);
-    if (!removed) {
-      return res.status(404).json({ error: 'Campaign not found' });
-    }
-    return res.json({ removed: true });
-  });
-
-  router.post('/notifications/campaigns/:campaignId/send', async (req, res) => {
-    const result = await notificationService.sendCampaign(req.params.campaignId);
-    if (!result) {
-      return res.status(404).json({ error: 'Campaign not found' });
-    }
-    return res.json(result);
-  });
+  );
 
   return router;
 }

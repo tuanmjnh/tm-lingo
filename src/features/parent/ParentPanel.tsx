@@ -1,6 +1,16 @@
 import { useState } from 'react';
-import { Check, LogIn, LogOut, Plus, User } from 'lucide-react';
+import {
+  Check,
+  ChevronRight,
+  LogIn,
+  LogOut,
+  Plus,
+  ShieldCheck,
+  User,
+  UserPlus,
+} from 'lucide-react';
 import type {
+  AuthUserProfile,
   LearnerPreferences,
   LearnerProfile,
   LessonProgressRecord,
@@ -9,11 +19,19 @@ import type {
 import type { UiMessages } from '../../i18n/messages';
 
 interface ParentPanelProps {
-  authUser: { uid: string; displayName: string | null; email: string | null } | null;
+  authUser: AuthUserProfile | null;
   authBusy: boolean;
   authError: string | null;
+  authNotice: string | null;
   onSignInGoogle: () => Promise<void>;
+  onSignInEmail: (email: string, password: string) => Promise<void>;
+  onSignUpEmail: (
+    email: string,
+    password: string,
+    displayName: string
+  ) => Promise<void>;
   onSignOut: () => Promise<void>;
+  onOpenAdmin: () => void;
   learners: LearnerProfile[];
   activeLearner: LearnerProfile;
   languages: LocaleConfig[];
@@ -39,8 +57,12 @@ export function ParentPanel({
   authUser,
   authBusy,
   authError,
+  authNotice,
   onSignInGoogle,
+  onSignInEmail,
+  onSignUpEmail,
   onSignOut,
+  onOpenAdmin,
   learners,
   activeLearner,
   languages,
@@ -57,6 +79,11 @@ export function ParentPanel({
     useState<LearnerProfile['avatarTone']>('emerald');
   const [saving, setSaving] = useState(false);
   const [savedNotice, setSavedNotice] = useState(false);
+
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
 
   const uiLocales = languages.filter((l) => l.enabled && l.uiEnabled);
   const learningLocales = languages.filter((l) => l.enabled && l.learningEnabled);
@@ -90,6 +117,16 @@ export function ParentPanel({
       setShowCreateForm(false);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim() || password.length < 6) return;
+    if (authMode === 'signin') {
+      await onSignInEmail(email, password);
+    } else {
+      await onSignUpEmail(email, password, displayName);
     }
   };
 
@@ -377,7 +414,7 @@ export function ParentPanel({
           </section>
         </div>
 
-        {/* Right column: Parent Account, Gentle Progress & Language Registry */}
+        {/* Right column: Parent Account, Learner Progress & System Admin Link */}
         <div className="lg:col-span-5 space-y-6">
           <section className="rounded-2xl border border-slate-200 bg-white p-6 space-y-4">
             <h2 className="text-lg font-bold text-slate-900">
@@ -390,7 +427,16 @@ export function ParentPanel({
                     {authUser.displayName ?? authUser.email ?? 'Parent'}
                   </p>
                   {authUser.email && (
-                    <p className="text-xs text-slate-500">{authUser.email}</p>
+                    <p className="text-xs text-slate-500">
+                      {authUser.email} ·{' '}
+                      <span className="font-medium text-slate-700">
+                        {authUser.role === 'admin'
+                          ? messages.parent.roleAdmin
+                          : authUser.role === 'teacher'
+                            ? messages.parent.roleTeacher
+                            : messages.parent.roleParent}
+                      </span>
+                    </p>
                   )}
                   <p className="mt-1.5 text-xs font-medium text-emerald-700">
                     {messages.parent.accountSignedInNote}
@@ -413,18 +459,142 @@ export function ParentPanel({
                 <p className="text-sm text-slate-600 leading-relaxed">
                   {messages.parent.accountGuestNote}
                 </p>
+
                 <button
                   type="button"
                   disabled={authBusy}
                   onClick={() => void onSignInGoogle()}
-                  className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-xl bg-sky-600 text-white text-sm font-semibold hover:bg-sky-700 disabled:opacity-50 transition-colors cursor-pointer"
+                  className="w-full inline-flex items-center justify-center gap-2.5 px-4 py-2.5 min-h-[44px] rounded-xl border border-slate-300 bg-white text-slate-900 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50 transition-colors cursor-pointer"
                 >
-                  <LogIn className="w-4 h-4" aria-hidden="true" />
+                  <svg
+                    className="w-4 h-4 shrink-0"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path
+                      fill="#4285F4"
+                      d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47a5.53 5.53 0 0 1-2.4 3.63v3h3.88c2.27-2.09 3.54-5.17 3.54-8.87Z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.09A12 12 0 0 0 12 24Z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.28 14.29A7.18 7.18 0 0 1 4.9 12c0-.79.14-1.56.38-2.29V6.62H1.29A12 12 0 0 0 0 12c0 1.94.46 3.77 1.29 5.38l3.99-3.09Z"
+                    />
+                    <path
+                      fill="#EA4335"
+                      d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0A12 12 0 0 0 1.29 6.62l3.99 3.09c.95-2.85 3.6-4.96 6.72-4.96Z"
+                    />
+                  </svg>
                   <span className="whitespace-nowrap">
                     {messages.parent.signInGoogle}
                   </span>
                 </button>
+
+                <div className="relative flex items-center py-1">
+                  <div className="flex-grow border-t border-slate-200" />
+                  <span className="mx-3 shrink-0 text-xs text-slate-400">
+                    {messages.parent.orWithEmail}
+                  </span>
+                  <div className="flex-grow border-t border-slate-200" />
+                </div>
+
+                <div className="flex border-b border-slate-200 text-sm font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => setAuthMode('signin')}
+                    className={`px-3 py-2 border-b-2 transition-colors cursor-pointer ${
+                      authMode === 'signin'
+                        ? 'border-sky-600 text-slate-900'
+                        : 'border-transparent text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    {messages.parent.signInTab}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAuthMode('signup')}
+                    className={`px-3 py-2 border-b-2 transition-colors cursor-pointer ${
+                      authMode === 'signup'
+                        ? 'border-sky-600 text-slate-900'
+                        : 'border-transparent text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    {messages.parent.signUpTab}
+                  </button>
+                </div>
+
+                <form onSubmit={handleAuthSubmit} className="space-y-3">
+                  {authMode === 'signup' && (
+                    <label className="block space-y-1">
+                      <span className="text-xs font-semibold text-slate-700">
+                        {messages.parent.displayNameLabel}
+                      </span>
+                      <input
+                        type="text"
+                        maxLength={48}
+                        value={displayName}
+                        onChange={(e) => setDisplayName(e.target.value)}
+                        placeholder="Mẹ Bé Min"
+                        className="w-full min-h-[42px] rounded-xl border border-slate-200 px-3 text-sm text-slate-900 focus:outline-none focus:border-sky-500"
+                      />
+                    </label>
+                  )}
+
+                  <label className="block space-y-1">
+                    <span className="text-xs font-semibold text-slate-700">
+                      {messages.parent.emailLabel}
+                    </span>
+                    <input
+                      type="email"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="parent@example.com"
+                      className="w-full min-h-[42px] rounded-xl border border-slate-200 px-3 text-sm text-slate-900 focus:outline-none focus:border-sky-500"
+                    />
+                  </label>
+
+                  <label className="block space-y-1">
+                    <span className="text-xs font-semibold text-slate-700">
+                      {messages.parent.passwordLabel}
+                    </span>
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full min-h-[42px] rounded-xl border border-slate-200 px-3 text-sm text-slate-900 focus:outline-none focus:border-sky-500"
+                    />
+                  </label>
+
+                  <button
+                    type="submit"
+                    disabled={authBusy}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] rounded-xl bg-sky-600 text-white text-sm font-semibold hover:bg-sky-700 disabled:opacity-50 transition-colors cursor-pointer"
+                  >
+                    {authMode === 'signin' ? (
+                      <LogIn className="w-4 h-4" aria-hidden="true" />
+                    ) : (
+                      <UserPlus className="w-4 h-4" aria-hidden="true" />
+                    )}
+                    <span className="whitespace-nowrap">
+                      {authMode === 'signin'
+                        ? messages.parent.signInButton
+                        : messages.parent.signUpButton}
+                    </span>
+                  </button>
+                </form>
               </div>
+            )}
+
+            {authNotice && (
+              <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                {authNotice}
+              </p>
             )}
             {authError && (
               <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
@@ -472,44 +642,31 @@ export function ParentPanel({
             )}
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 space-y-4">
-            <h2 className="text-lg font-bold text-slate-900">
-              {messages.parent.registryHeading}
-            </h2>
-            <div className="divide-y divide-slate-100 text-sm">
-              {languages.map((lang) => (
-                <div
-                  key={lang.locale}
-                  className="py-3 flex items-center justify-between gap-4"
-                >
-                  <div>
-                    <p className="font-semibold text-slate-900">
-                      {lang.nativeName}{' '}
-                      <span className="font-normal text-slate-500">
-                        ({lang.locale})
-                      </span>
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      UI: {lang.uiEnabled ? 'Yes' : 'No'} · Learn:{' '}
-                      {lang.learningEnabled ? 'Yes' : 'No'} · TTS:{' '}
-                      {lang.ttsEnabled ? 'Yes' : 'No'}
-                    </p>
-                  </div>
-                  <span
-                    className={`text-xs font-semibold ${
-                      lang.contentStatus === 'ready'
-                        ? 'text-emerald-700'
-                        : 'text-slate-500'
-                    }`}
-                  >
-                    {lang.contentStatus === 'ready'
-                      ? messages.parent.statusReady
-                      : messages.parent.statusPlanned}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </section>
+          {authUser &&
+            (authUser.role === 'admin' || authUser.role === 'teacher') && (
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 space-y-3">
+              <div className="flex items-center gap-2 text-slate-900">
+                <ShieldCheck
+                  className="w-5 h-5 text-sky-600 shrink-0"
+                  aria-hidden="true"
+                />
+                <h2 className="text-base font-bold">
+                  {messages.parent.openAdminTitle}
+                </h2>
+              </div>
+              <p className="text-sm text-slate-600 leading-relaxed">
+                {messages.parent.openAdminDesc}
+              </p>
+              <button
+                type="button"
+                onClick={onOpenAdmin}
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 min-h-[42px] rounded-xl border border-slate-200 bg-slate-50 text-sm font-semibold text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <span>{messages.parent.openAdminButton}</span>
+                <ChevronRight className="w-4 h-4" aria-hidden="true" />
+              </button>
+            </section>
+          )}
         </div>
       </div>
     </div>
