@@ -11,8 +11,8 @@ import type {
   StoryReadingPosition,
   VocabularyConcept,
   VoiceProfile,
-} from '../../packages/contracts/types.ts';
-import { getMongoCollection } from '../db/mongo.ts';
+} from '../../packages/contracts/types';
+import { getMongoCollection } from '../db/mongo';
 
 export const LANGUAGE_REGISTRY: LocaleConfig[] = [
   {

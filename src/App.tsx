@@ -1,3 +1,5 @@
+'use client';
+
 import { useCallback, useEffect, useState } from 'react';
 import { Globe } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
@@ -184,6 +186,15 @@ export function App() {
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  // Register push notification service worker
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/push-sw.js').catch((err) => {
+        console.warn('Service worker registration failed:', err);
+      });
+    }
   }, []);
 
   const isStaff = authUser?.role === 'admin' || authUser?.role === 'teacher';

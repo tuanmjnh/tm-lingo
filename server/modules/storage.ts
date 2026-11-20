@@ -1,7 +1,7 @@
 import path from 'node:path';
-import type { MediaAssetRecord } from '../../packages/contracts/types.ts';
-import { getSupabaseAdmin } from '../auth/supabaseAuth.ts';
-import { getMongoCollection } from '../db/mongo.ts';
+import type { MediaAssetRecord } from '../../packages/contracts/types';
+import { getSupabaseAdmin } from '../auth/supabaseAuth';
+import { getMongoCollection } from '../db/mongo';
 
 const MEDIA_BUCKET = 'tm-lingo-media';
 const ALLOWED_IMAGE_TYPES = new Set([

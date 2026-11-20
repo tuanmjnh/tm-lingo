@@ -1,14 +1,14 @@
 import * as webpushNamespace from 'web-push';
 import type { PushSubscription } from 'web-push';
-import { env } from '../config/env.ts';
-import { getMongoCollection } from '../db/mongo.ts';
+import { env } from '../config/env';
+import { getMongoCollection } from '../db/mongo';
 import type {
   NotificationCampaign,
   NotificationCategory,
   NotificationDeliveryLog,
   NotificationStatus,
   PushSubscriptionSummary,
-} from '../../packages/contracts/types.ts';
+} from '../../packages/contracts/types';
 
 const webpush =
   (webpushNamespace as unknown as { default?: typeof webpushNamespace })

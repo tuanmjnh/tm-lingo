@@ -1,7 +1,7 @@
-import type { ManagedUserRecord, UserRole } from '../../packages/contracts/types.ts';
-import { env } from '../config/env.ts';
-import { getMongoCollection } from '../db/mongo.ts';
-import { getSupabaseAdmin } from './supabaseAuth.ts';
+import type { ManagedUserRecord, UserRole } from '../../packages/contracts/types';
+import { env } from '../config/env';
+import { getMongoCollection } from '../db/mongo';
+import { getSupabaseAdmin } from './supabaseAuth';
 
 const memoryRoles: Map<string, ManagedUserRecord> = new Map();
 let adminSeedAttempted = false;

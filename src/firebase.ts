@@ -15,7 +15,11 @@ export const googleProvider = new GoogleAuthProvider();
 export const firebaseProjectId = firebaseConfig.projectId;
 
 export async function requestFcmWebPushToken(): Promise<string | null> {
-  const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY?.trim();
+  const vapidKey = (
+    process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY ||
+    process.env.VITE_FIREBASE_VAPID_KEY ||
+    ''
+  ).trim();
   if (!vapidKey) return null;
   const supported = await isMessagingSupported().catch(() => false);
   if (!supported) return null;

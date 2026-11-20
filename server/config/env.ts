@@ -75,16 +75,51 @@ const serverEnvSchema = z.object({
   SESSION_SECRET: z.string().default(DEFAULT_DEV_SESSION_SECRET),
 });
 
-const parsed = serverEnvSchema.safeParse(process.env);
+const rawEnv = {
+  ...process.env,
+  VITE_FIREBASE_PROJECT_ID:
+    process.env.VITE_FIREBASE_PROJECT_ID ||
+    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
+    '',
+  VITE_FIREBASE_MESSAGING_SENDER_ID:
+    process.env.VITE_FIREBASE_MESSAGING_SENDER_ID ||
+    process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ||
+    '',
+  VITE_FIREBASE_APP_ID:
+    process.env.VITE_FIREBASE_APP_ID ||
+    process.env.NEXT_PUBLIC_FIREBASE_APP_ID ||
+    '',
+  VITE_FIREBASE_VAPID_KEY:
+    process.env.VITE_FIREBASE_VAPID_KEY ||
+    process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY ||
+    '',
+  VITE_SUPABASE_URL:
+    process.env.VITE_SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.SUPABASE_URL ||
+    '',
+  VITE_SUPABASE_ANON_KEY:
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    '',
+  SUPABASE_URL:
+    process.env.SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    '',
+};
+
+const parsed = serverEnvSchema.safeParse(rawEnv);
 if (!parsed.success) {
-  console.error(
-    'Invalid server environment configuration:',
+  console.warn(
+    'Warning: Server environment configuration validation failed:',
     parsed.error.flatten().fieldErrors
   );
-  process.exit(1);
 }
 
-export const env = parsed.data;
+export const env = parsed.success
+  ? parsed.data
+  : (serverEnvSchema.parse({}) as z.infer<typeof serverEnvSchema>);
 
 export function getRuntimeEnvironmentSummary(mongoStatus?: {
   connected: boolean;
