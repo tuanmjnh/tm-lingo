@@ -25,7 +25,7 @@ function loadDotEnvFile(filename: string): void {
       value = value.slice(1, -1);
     }
 
-    // Never overwrite non-empty variables already provided by the host/secret manager
+    // Never overwrite non-empty variables already provided by host/secret manager
     if (!process.env[key]?.trim() && value) {
       process.env[key] = value;
     }
@@ -39,27 +39,45 @@ loadDotEnvFile('.env');
 const DEFAULT_DEV_SESSION_SECRET = 'tm-lingo-local-dev-session-secret';
 
 const serverEnvSchema = z.object({
+  // Runtime
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   APP_BASE_URL: z.string().default('http://localhost:3000'),
+  CAPACITOR_SERVER_URL: z.string().default('https://app.tm-lingo.app'),
 
-  // MongoDB primary data store
+  // Client
+  VITE_APP_NAME: z.string().default('TM-Lingo'),
+  VITE_DEFAULT_INTERFACE_LOCALE: z.string().default('vi'),
+  VITE_DEFAULT_LEARNING_LOCALE: z.string().default('en'),
+
+  // MongoDB Primary Application Database
   MONGODB_URI: z.string().default(''),
   MONGODB_DATABASE: z.string().default('tm_lingo'),
+
+  // Supabase Auth & Storage (optional)
+  VITE_SUPABASE_URL: z.string().default(''),
+  VITE_SUPABASE_ANON_KEY: z.string().default(''),
+  SUPABASE_URL: z.string().default(''),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().default(''),
 
   // AES-256-GCM master secret for self-managed AI & Storage providers
   AI_CONFIG_SECRET: z.string().default(''),
 
   // TM-Hub Control Plane (Staff IAM, RBAC, Users, Audit Logs)
   AUTH_PROVIDER: z.string().default('hub'),
-  HUB_BASE_URL: z.string().default(''),
-  HUB_APP_ID: z.string().default('tm-lingo'),
-  HUB_DEVICE_ID: z.string().default(''),
-  HUB_DEVICE_SECRET: z.string().default(''),
-  HUB_APP_SECRET: z.string().default(''),
+  VITE_PUBLIC_HUB_URL: z.string().default(''),
+  VITE_PUBLIC_HUB_APP_ID: z.string().default('tm-lingo'),
+  VITE_HUB_APP_SECRET: z.string().default(''),
   AUTH_JWT_SECRET: z.string().default(''),
 
-  // Local dev staff fallback (only used when HUB_BASE_URL is not configured)
+  // Hub legacy compatibility keys
+  HUB_BASE_URL: z.string().default(''),
+  HUB_APP_ID: z.string().default('tm-lingo'),
+  HUB_APP_SECRET: z.string().default(''),
+  HUB_DEVICE_ID: z.string().default(''),
+  HUB_DEVICE_SECRET: z.string().default(''),
+
+  // Local dev staff fallback (only used when Hub URL is not configured)
   SEED_ROOT_EMAIL: z.string().default('root@tm-lingo.app'),
   SEED_ROOT_PASSWORD: z.string().default(''),
   SEED_ADMIN_EMAIL: z.string().default('admin@tm-lingo.app'),
@@ -68,16 +86,16 @@ const serverEnvSchema = z.object({
   // Firebase optional client VAPID key
   NEXT_PUBLIC_FIREBASE_VAPID_KEY: z.string().default(''),
 
-  // Server-side Gemini API fallback
+  // Server-side Gemini AI
   GEMINI_API_KEY: z.string().default(''),
-  GEMINI_TEXT_MODEL: z.string().default('gemini-4-hydrogen'),
-  GEMINI_IMAGE_MODEL: z.string().default('gemini-3.1-flash-lite-image'),
-  GEMINI_TTS_MODEL: z.string().default('gemini-3.8-flash-lite-tts'),
+  GEMINI_TEXT_MODEL: z.string().default('gemini-2.5-flash'),
+  GEMINI_IMAGE_MODEL: z.string().default('gemini-2.5-flash-image'),
+  GEMINI_TTS_MODEL: z.string().default('gemini-2.5-flash-preview-tts'),
 
-  // Object Storage (Cloudflare R2 / S3-compatible) env fallback
+  // Object Storage (Cloudflare R2 / S3-compatible)
   OBJECT_STORAGE_ENDPOINT: z.string().default(''),
   OBJECT_STORAGE_REGION: z.string().default('auto'),
-  OBJECT_STORAGE_BUCKET: z.string().default(''),
+  OBJECT_STORAGE_BUCKET: z.string().default('assets'),
   OBJECT_STORAGE_ACCESS_KEY: z.string().default(''),
   OBJECT_STORAGE_SECRET_KEY: z.string().default(''),
   OBJECT_STORAGE_PUBLIC_BASE_URL: z.string().default(''),
@@ -87,8 +105,31 @@ const serverEnvSchema = z.object({
   VAPID_PUBLIC_KEY: z.string().default(''),
   VAPID_PRIVATE_KEY: z.string().default(''),
 
+  // Session Signing Secret
   SESSION_SECRET: z.string().default(DEFAULT_DEV_SESSION_SECRET),
 });
+
+const hubUrl =
+  process.env.VITE_PUBLIC_HUB_URL ||
+  process.env.NEXT_PUBLIC_HUB_URL ||
+  process.env.HUB_BASE_URL ||
+  process.env.HUB_URL ||
+  process.env.NUXT_PUBLIC_HUB_URL ||
+  '';
+
+const hubAppId =
+  process.env.VITE_PUBLIC_HUB_APP_ID ||
+  process.env.NEXT_PUBLIC_HUB_APP_ID ||
+  process.env.HUB_APP_ID ||
+  process.env.NUXT_PUBLIC_HUB_APP_ID ||
+  process.env.APP_ID ||
+  'tm-lingo';
+
+const hubAppSecret =
+  process.env.VITE_HUB_APP_SECRET ||
+  process.env.HUB_APP_SECRET ||
+  process.env.NUXT_HUB_APP_SECRET ||
+  '';
 
 const rawEnv = {
   ...process.env,
@@ -96,28 +137,13 @@ const rawEnv = {
     process.env.AUTH_PROVIDER ||
     process.env.NEXT_PUBLIC_AUTH_PROVIDER ||
     'hub',
-  HUB_BASE_URL:
-    process.env.HUB_BASE_URL ||
-    process.env.HUB_URL ||
-    process.env.VITE_PUBLIC_HUB_URL ||
-    process.env.NEXT_PUBLIC_HUB_URL ||
-    process.env.NUXT_PUBLIC_HUB_URL ||
-    '',
-  HUB_APP_ID:
-    process.env.HUB_APP_ID ||
-    process.env.VITE_PUBLIC_HUB_APP_ID ||
-    process.env.NEXT_PUBLIC_HUB_APP_ID ||
-    process.env.NUXT_PUBLIC_HUB_APP_ID ||
-    process.env.APP_ID ||
-    'tm-lingo',
-  HUB_APP_SECRET:
-    process.env.HUB_APP_SECRET ||
-    process.env.VITE_HUB_APP_SECRET ||
-    process.env.NUXT_HUB_APP_SECRET ||
-    '',
-  AUTH_JWT_SECRET:
-    process.env.AUTH_JWT_SECRET ||
-    '',
+  VITE_PUBLIC_HUB_URL: hubUrl,
+  VITE_PUBLIC_HUB_APP_ID: hubAppId,
+  VITE_HUB_APP_SECRET: hubAppSecret,
+  HUB_BASE_URL: hubUrl,
+  HUB_APP_ID: hubAppId,
+  HUB_APP_SECRET: hubAppSecret,
+  AUTH_JWT_SECRET: process.env.AUTH_JWT_SECRET || '',
   NEXT_PUBLIC_FIREBASE_VAPID_KEY:
     process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY ||
     process.env.VITE_FIREBASE_VAPID_KEY ||
@@ -138,24 +164,28 @@ export const env = parsed.success
 
 /**
  * Returns a valid 32-byte Uint8Array AES-256-GCM key for encrypting AI & Storage credentials.
- * Uses AI_CONFIG_SECRET when set (32-byte base64 or SHA-256 derived), falling back to SESSION_SECRET.
+ * Derived from AUTH_JWT_SECRET, AI_CONFIG_SECRET, or SESSION_SECRET.
  */
 export function getMasterEncryptionKey(): Uint8Array {
-  const configured = env.AI_CONFIG_SECRET.trim();
-  if (configured) {
+  const seed =
+    env.AUTH_JWT_SECRET.trim() ||
+    env.AI_CONFIG_SECRET.trim() ||
+    env.SESSION_SECRET.trim() ||
+    DEFAULT_DEV_SESSION_SECRET;
+
+  if (env.AI_CONFIG_SECRET.trim()) {
     try {
-      const decoded = Buffer.from(configured, 'base64');
+      const decoded = Buffer.from(env.AI_CONFIG_SECRET.trim(), 'base64');
       if (decoded.byteLength === 32) {
         return new Uint8Array(decoded);
       }
     } catch {
-      // fall through to deterministic SHA-256 derivation
+      // fall through
     }
-    return new Uint8Array(crypto.createHash('sha256').update(configured).digest());
   }
-  const fallbackSeed = env.SESSION_SECRET.trim() || DEFAULT_DEV_SESSION_SECRET;
+
   return new Uint8Array(
-    crypto.createHash('sha256').update(`tm-lingo-config:${fallbackSeed}`).digest()
+    crypto.createHash('sha256').update(`tm-lingo-config:${seed}`).digest()
   );
 }
 
@@ -163,7 +193,7 @@ export function isTmHubConfigured(): boolean {
   if (env.AUTH_PROVIDER && env.AUTH_PROVIDER !== 'hub') {
     return false;
   }
-  return Boolean(env.HUB_BASE_URL.trim());
+  return Boolean(env.VITE_PUBLIC_HUB_URL.trim() || env.HUB_BASE_URL.trim());
 }
 
 export function getRuntimeEnvironmentSummary(mongoStatus?: {
@@ -178,6 +208,8 @@ export function getRuntimeEnvironmentSummary(mongoStatus?: {
   const has = (val: string) => Boolean(val && val.trim().length > 0);
   const mongodbConfigured = has(env.MONGODB_URI);
   const tmHubConfigured = isTmHubConfigured();
+  const supabaseConfigured =
+    has(env.SUPABASE_URL) || has(env.VITE_SUPABASE_URL);
   const objectStorageConfigured =
     has(env.OBJECT_STORAGE_ENDPOINT) &&
     has(env.OBJECT_STORAGE_BUCKET) &&
@@ -207,9 +239,9 @@ export function getRuntimeEnvironmentSummary(mongoStatus?: {
       firebaseConfigured,
       authProvider: env.AUTH_PROVIDER,
       tmHubConfigured,
-      hubBaseUrl: env.HUB_BASE_URL,
-      hubAppId: env.HUB_APP_ID,
-      hubAppSecretConfigured: has(env.HUB_APP_SECRET),
+      hubBaseUrl: env.HUB_BASE_URL || env.VITE_PUBLIC_HUB_URL,
+      hubAppId: env.HUB_APP_ID || env.VITE_PUBLIC_HUB_APP_ID,
+      hubAppSecretConfigured: has(env.HUB_APP_SECRET || env.VITE_HUB_APP_SECRET),
       authJwtSecretConfigured: has(env.AUTH_JWT_SECRET),
       aiConfigSecretConfigured: has(env.AI_CONFIG_SECRET),
       webPushConfigured: has(env.VAPID_PUBLIC_KEY) && has(env.VAPID_PRIVATE_KEY),
@@ -226,9 +258,9 @@ export function getRuntimeEnvironmentSummary(mongoStatus?: {
       FIREBASE_APPLET_CONFIG: firebaseConfigured,
       AUTH_PROVIDER: has(env.AUTH_PROVIDER),
       HUB_BASE_URL: tmHubConfigured,
-      HUB_APP_ID: has(env.HUB_APP_ID),
+      HUB_APP_ID: has(env.HUB_APP_ID || env.VITE_PUBLIC_HUB_APP_ID),
       HUB_DEVICE_CREDENTIAL: has(env.HUB_DEVICE_ID) && has(env.HUB_DEVICE_SECRET),
-      HUB_APP_SECRET: has(env.HUB_APP_SECRET),
+      HUB_APP_SECRET: has(env.HUB_APP_SECRET || env.VITE_HUB_APP_SECRET),
       AUTH_JWT_SECRET: has(env.AUTH_JWT_SECRET),
       AI_CONFIG_SECRET: has(env.AI_CONFIG_SECRET),
       VAPID_SUBJECT: has(env.VAPID_SUBJECT),
