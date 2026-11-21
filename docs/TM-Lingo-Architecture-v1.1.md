@@ -1,8 +1,10 @@
 # TM-Lingo — Kiến trúc sản phẩm & kỹ thuật chính thức
 
-**Phiên bản:** 1.1  
+> **Lưu ý:** Tài liệu v1.1 này được lưu giữ làm bản tham chiếu lịch sử. Kiến trúc chính thức hiện hành (Next.js 15 App Router, 12 collection MongoDB, Dual Auth TM-Hub + Firebase, tự chủ AI & Storage Providers) đã được nâng cấp sang **[TM-Lingo-Architecture-v2.0.md](./TM-Lingo-Architecture-v2.0.md)**.
+
+**Phiên bản:** 1.1 (Archived)  
 **Ngày cập nhật:** 2026-11-19  
-**Trạng thái:** Product / Architecture Baseline  
+**Trạng thái:** Superseded by v2.0  
 **Tên dự án chính thức:** `TM-Lingo`  
 **Định vị:** Nền tảng học đa ngôn ngữ dành cho trẻ em  
 **Độ tuổi khởi đầu:** 3–5 tuổi  

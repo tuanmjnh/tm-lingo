@@ -1,21 +1,123 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
   :root {
     --font-display: 'Bricolage Grotesque', system-ui, -apple-system, sans-serif;
     --font-body: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+
+    /* Default accent: Sky */
+    --accent-50: #f0f9ff;
+    --accent-100: #e0f2fe;
+    --accent-200: #bae6fd;
+    --accent-500: #0ea5e9;
+    --accent-600: #0284c7;
+    --accent-700: #0369a1;
+    --accent-soft-dark: rgba(14, 165, 233, 0.16);
+    --accent-border-dark: rgba(56, 189, 248, 0.35);
+    --accent-text-dark: #38bdf8;
+  }
+
+  :root[data-accent='emerald'] {
+    --accent-50: #ecfdf5;
+    --accent-100: #d1fae5;
+    --accent-200: #a7f3d0;
+    --accent-500: #10b981;
+    --accent-600: #059669;
+    --accent-700: #047857;
+    --accent-soft-dark: rgba(16, 185, 129, 0.16);
+    --accent-border-dark: rgba(52, 211, 153, 0.35);
+    --accent-text-dark: #34d399;
+  }
+
+  :root[data-accent='indigo'] {
+    --accent-50: #eef2ff;
+    --accent-100: #e0e7ff;
+    --accent-200: #c7d2fe;
+    --accent-500: #6366f1;
+    --accent-600: #4f46e5;
+    --accent-700: #4338ca;
+    --accent-soft-dark: rgba(99, 102, 241, 0.18);
+    --accent-border-dark: rgba(129, 140, 248, 0.38);
+    --accent-text-dark: #818cf8;
+  }
+
+  :root[data-accent='amber'] {
+    --accent-50: #fffbeb;
+    --accent-100: #fef3c7;
+    --accent-200: #fde68a;
+    --accent-500: #f59e0b;
+    --accent-600: #d97706;
+    --accent-700: #b45309;
+    --accent-soft-dark: rgba(245, 158, 11, 0.16);
+    --accent-border-dark: rgba(251, 191, 36, 0.38);
+    --accent-text-dark: #fbbf24;
+  }
+
+  :root[data-accent='rose'] {
+    --accent-50: #fff1f2;
+    --accent-100: #ffe4e6;
+    --accent-200: #fecdd3;
+    --accent-500: #f43f5e;
+    --accent-600: #e11d48;
+    --accent-700: #be123c;
+    --accent-soft-dark: rgba(244, 63, 94, 0.16);
+    --accent-border-dark: rgba(251, 113, 133, 0.38);
+    --accent-text-dark: #fb7185;
   }
 
   body {
     font-family: var(--font-body);
     background-color: #f8fafc;
     color: #0f172a;
+    transition: background-color 180ms ease, color 180ms ease;
+  }
+
+  html.dark body {
+    background-color: #0b1120;
+    color: #f1f5f9;
+    letter-spacing: 0.005em;
   }
 
   h1, h2, h3, .font-display {
     font-family: var(--font-display);
     text-wrap: balance;
   }
+}
+
+/* Dynamic accent utilities driven by Settings Slideover */
+.btn-accent {
+  background-color: var(--accent-600);
+  color: #ffffff;
+}
+.btn-accent:hover {
+  background-color: var(--accent-700);
+}
+.text-accent {
+  color: var(--accent-600);
+}
+html.dark .text-accent {
+  color: var(--accent-text-dark);
+}
+.bg-accent-soft {
+  background-color: var(--accent-50);
+  color: var(--accent-700);
+}
+html.dark .bg-accent-soft {
+  background-color: var(--accent-soft-dark);
+  color: var(--accent-text-dark);
+}
+.border-accent {
+  border-color: var(--accent-600);
+}
+html.dark .border-accent {
+  border-color: var(--accent-border-dark);
+}
+.border-accent-active {
+  border-color: var(--accent-600);
+}
+html.dark .border-accent-active {
+  border-color: var(--accent-text-dark);
 }
 
 .tabular-nums {

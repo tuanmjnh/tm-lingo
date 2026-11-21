@@ -1,131 +1,150 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+'use client';
+
+import { useRef, useState } from 'react';
 import {
   Bell,
+  Cpu,
   FolderOpen,
   Globe,
+  GraduationCap,
   Image as ImageIcon,
+  Layers,
+  LayoutDashboard,
+  LogOut,
   Music,
-  RefreshCw,
+  Rss,
+  Search,
   ShieldCheck,
-  Trash2,
   Upload,
   Users,
 } from 'lucide-react';
 import type {
+  AgeGroupConfig,
   AuthUserProfile,
+  DeleteMode,
   LocaleConfig,
-  ManagedUserRecord,
   MediaAssetRecord,
-  UserRole,
 } from '../../../packages/contracts/types';
+import { isRootStaff } from '../../../packages/contracts/permissions';
 import type { UiMessages } from '../../i18n/messages';
-import { apiClient } from '../../shared/apiClient';
 import { NotificationManager } from '../notifications/NotificationManager';
+import { AdminAgeGroupsPanel } from './AdminAgeGroupsPanel';
+import { AdminAuditPanel } from './AdminAuditPanel';
+import { AdminCmsStudio } from './AdminCmsStudio';
+import { AdminDashboardOverview } from './AdminDashboardOverview';
+import { AdminLanguagesPanel } from './AdminLanguagesPanel';
+import { AdminProvidersPanel } from './AdminProvidersPanel';
+import { AdminStorySourcesPanel } from './AdminStorySourcesPanel';
+import { DeleteActionsControl } from './DeleteActionsControl';
 
-export type AdminSection = 'notifications' | 'media' | 'languages' | 'users';
+export type AdminSection =
+  | 'overview'
+  | 'cms'
+  | 'story-sources'
+  | 'age-groups'
+  | 'media'
+  | 'notifications'
+  | 'providers'
+  | 'languages'
+  | 'users';
 
 interface AdminWorkspaceProps {
-  authUser: AuthUserProfile;
+  staffUser: AuthUserProfile;
+  iamMode: 'tm-hub' | 'local-dev';
   interfaceLocale: string;
   activeLearningLocale: string;
   initialSection?: AdminSection;
   languages: LocaleConfig[];
+  ageGroups: AgeGroupConfig[];
   mediaAssets: MediaAssetRecord[];
+  storageSummary: { bucket: string; provider: string };
   messages: UiMessages;
   onUploadMedia: (payload: {
     file: File;
     title: string;
     locale: string;
   }) => Promise<void>;
-  onDeleteMedia: (assetId: string) => Promise<void>;
+  onDeleteMedia: (assetId: string, mode: DeleteMode) => Promise<void>;
+  onRestoreMedia: (assetId: string) => Promise<void>;
+  onReloadMedia: () => Promise<void>;
+  onStaffSignOut: () => Promise<void>;
+  onContentPublished: () => void;
+  onLanguagesUpdated: () => void;
+  onAgeGroupsUpdated: () => void;
+}
+
+function hasCap(user: AuthUserProfile, cap: string): boolean {
+  const caps = user.capabilities ?? [];
+  if (caps.includes('*') || caps.includes(cap)) return true;
+  if (user.role === 'admin') return true;
+  return false;
 }
 
 export function AdminWorkspace({
-  authUser,
+  staffUser,
+  iamMode,
   interfaceLocale,
   activeLearningLocale,
-  initialSection = 'notifications',
+  initialSection = 'overview',
   languages,
+  ageGroups,
   mediaAssets,
+  storageSummary,
   messages,
   onUploadMedia,
   onDeleteMedia,
+  onRestoreMedia,
+  onReloadMedia,
+  onStaffSignOut,
+  onContentPublished,
+  onLanguagesUpdated,
+  onAgeGroupsUpdated,
 }: AdminWorkspaceProps) {
   const isVi = interfaceLocale === 'vi';
-  const isAdmin = authUser.role === 'admin';
+  const isRoot = isRootStaff(staffUser);
+  const canManageProviders = hasCap(staffUser, 'tm-lingo.providers.manage');
+  const canManageUsers = hasCap(staffUser, 'users.read');
+  const canPublishCms = hasCap(staffUser, 'tm-lingo.content.publish');
+
   const [section, setSection] = useState<AdminSection>(initialSection);
 
-  // Sync external initialSection jumps (e.g. from NotificationBell)
+  // Sync external section jumps (e.g. from NotificationBell)
   const lastInitialRef = useRef(initialSection);
   if (lastInitialRef.current !== initialSection) {
     lastInitialRef.current = initialSection;
     setSection(initialSection);
   }
 
-  // Supabase Storage upload state
+  // Media upload & filter state
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [mediaTitle, setMediaTitle] = useState('');
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [mediaBusy, setMediaBusy] = useState(false);
+  const [mediaActionId, setMediaActionId] = useState<string | null>(null);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  const [mediaNotice, setMediaNotice] = useState<string | null>(null);
+  const [mediaView, setMediaView] = useState<'active' | 'archived'>('active');
+  const [mediaSearch, setMediaSearch] = useState('');
+  const [mediaKindFilter, setMediaKindFilter] = useState<'all' | 'image' | 'audio'>('all');
 
-  // Admin Users & Roles state
-  const [managedUsers, setManagedUsers] = useState<ManagedUserRecord[]>([]);
-  const [usersLoading, setUsersLoading] = useState(false);
-  const [usersError, setUsersError] = useState<string | null>(null);
-  const [usersNotice, setUsersNotice] = useState<string | null>(null);
-  const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
-
-  const loadManagedUsers = useCallback(async () => {
-    if (!isAdmin) return;
-    setUsersLoading(true);
-    setUsersError(null);
-    try {
-      const res = await apiClient.listAdminUsers();
-      setManagedUsers(res.users);
-    } catch (err) {
-      setUsersError(
-        err instanceof Error ? err.message : 'Could not load users'
-      );
-    } finally {
-      setUsersLoading(false);
+  const activeMedia = mediaAssets.filter((a) => !a.archivedAt);
+  const archivedMedia = mediaAssets.filter((a) => Boolean(a.archivedAt));
+  const baseMedia = mediaView === 'active' ? activeMedia : archivedMedia;
+  const visibleMedia = baseMedia.filter((a) => {
+    if (mediaKindFilter !== 'all' && a.kind !== mediaKindFilter) return false;
+    const q = mediaSearch.trim().toLowerCase();
+    if (q && !a.title.toLowerCase().includes(q) && !a.locale.toLowerCase().includes(q)) {
+      return false;
     }
-  }, [isAdmin]);
-
-  useEffect(() => {
-    if (section === 'users' && isAdmin) {
-      void loadManagedUsers();
-    }
-  }, [section, isAdmin, loadManagedUsers]);
-
-  const handleRoleChange = async (userId: string, nextRole: UserRole) => {
-    setUpdatingUserId(userId);
-    setUsersError(null);
-    setUsersNotice(null);
-    try {
-      const res = await apiClient.updateUserRole(userId, nextRole);
-      setManagedUsers((prev) =>
-        prev.map((u) => (u.userId === userId ? res.user : u))
-      );
-      setUsersNotice(
-        isVi
-          ? `Đã cập nhật quyền cho ${res.user.email ?? res.user.displayName ?? userId}.`
-          : `Updated role for ${res.user.email ?? res.user.displayName ?? userId}.`
-      );
-    } catch (err) {
-      setUsersError(
-        err instanceof Error ? err.message : 'Could not update role'
-      );
-    } finally {
-      setUpdatingUserId(null);
-    }
-  };
+    return true;
+  });
 
   const handleMediaSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!mediaFile) return;
     setMediaBusy(true);
     setMediaError(null);
+    setMediaNotice(null);
     try {
       await onUploadMedia({
         file: mediaFile,
@@ -137,10 +156,53 @@ export function AdminWorkspace({
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
+      setMediaNotice(
+        isVi
+          ? 'Đã tải học liệu lên kho lưu trữ thành công.'
+          : 'Uploaded media asset successfully.'
+      );
     } catch (err) {
       setMediaError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
       setMediaBusy(false);
+    }
+  };
+
+  const handleMediaDelete = async (assetId: string, mode: DeleteMode) => {
+    setMediaActionId(assetId);
+    setMediaError(null);
+    setMediaNotice(null);
+    try {
+      await onDeleteMedia(assetId, mode);
+      setMediaNotice(
+        mode === 'hard'
+          ? isVi
+            ? 'Đã xóa vĩnh viễn tệp học liệu khỏi kho lưu trữ.'
+            : 'Permanently deleted media file and record.'
+          : isVi
+            ? 'Đã lưu trữ học liệu (tệp trên kho lưu trữ được giữ nguyên để có thể khôi phục).'
+            : 'Archived media asset (object retained in storage for restore).'
+      );
+    } catch (err) {
+      setMediaError(err instanceof Error ? err.message : 'Delete failed');
+    } finally {
+      setMediaActionId(null);
+    }
+  };
+
+  const handleMediaRestore = async (assetId: string) => {
+    setMediaActionId(assetId);
+    setMediaError(null);
+    setMediaNotice(null);
+    try {
+      await onRestoreMedia(assetId);
+      setMediaNotice(
+        isVi ? 'Đã khôi phục học liệu.' : 'Restored media asset.'
+      );
+    } catch (err) {
+      setMediaError(err instanceof Error ? err.message : 'Restore failed');
+    } finally {
+      setMediaActionId(null);
     }
   };
 
@@ -150,9 +212,24 @@ export function AdminWorkspace({
     icon: typeof Bell;
   }> = [
     {
-      key: 'notifications',
-      label: isVi ? 'Thông báo & Push' : 'Notifications & Push',
-      icon: Bell,
+      key: 'overview',
+      label: isVi ? 'Tổng quan' : 'Overview',
+      icon: LayoutDashboard,
+    },
+    {
+      key: 'cms',
+      label: isVi ? 'Nội dung & AI' : 'Content Studio',
+      icon: Layers,
+    },
+    {
+      key: 'story-sources',
+      label: isVi ? 'Nguồn truyện' : 'Story Sources',
+      icon: Rss,
+    },
+    {
+      key: 'age-groups',
+      label: isVi ? 'Nhóm tuổi (K-12)' : 'Age Groups (K-12)',
+      icon: GraduationCap,
     },
     {
       key: 'media',
@@ -160,23 +237,40 @@ export function AdminWorkspace({
       icon: FolderOpen,
     },
     {
+      key: 'notifications',
+      label: isVi ? 'Thông báo' : 'Notifications',
+      icon: Bell,
+    },
+    ...(canManageProviders
+      ? [
+          {
+            key: 'providers' as const,
+            label: isVi ? 'AI & Lưu trữ' : 'AI & Storage',
+            icon: Cpu,
+          },
+        ]
+      : []),
+    {
       key: 'languages',
-      label: 'Language Registry',
+      label: isVi ? 'Ngôn ngữ & Giọng đọc' : 'Languages & Voices',
       icon: Globe,
     },
-    ...(isAdmin
+    ...(canManageUsers
       ? [
           {
             key: 'users' as const,
-            label: isVi ? 'Tài khoản & Phân quyền' : 'Users & Roles',
+            label: isVi ? 'Nhân sự & Nhật ký' : 'Staff & Activity',
             icon: Users,
           },
         ]
       : []),
   ];
 
-  const roleLabel =
-    authUser.role === 'admin'
+  const roleLabel = isRoot
+    ? isVi
+      ? 'Root (Toàn quyền)'
+      : 'Root (Full Access)'
+    : staffUser.role === 'admin'
       ? isVi
         ? 'Quản trị viên (Admin)'
         : 'Administrator'
@@ -184,30 +278,43 @@ export function AdminWorkspace({
         ? 'Giáo viên (Teacher)'
         : 'Teacher';
 
+  const activeTabMeta = tabs.find((t) => t.key === section) ?? tabs[0];
+
   return (
-    <div className="space-y-8">
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-slate-200 pb-6">
-        <div className="max-w-2xl space-y-2">
-          <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500">
-            <ShieldCheck className="w-4 h-4 text-sky-600" aria-hidden="true" />
-            <span className="font-semibold text-slate-800">{roleLabel}</span>
-            <span aria-hidden="true">·</span>
-            <span>{authUser.email ?? authUser.displayName ?? 'Admin'}</span>
+    <div className="grid grid-cols-1 lg:grid-cols-[248px_minmax(0,1fr)] gap-6 items-start">
+      {/* Desktop Sticky Sidebar (248px) & Mobile Compact Header */}
+      <aside className="lg:sticky lg:top-24 rounded-2xl border border-slate-200 bg-white p-4 space-y-5">
+        <div className="space-y-2 pb-4 border-b border-slate-100">
+          <div className="flex items-center justify-between gap-2">
+            <div className="inline-flex items-center gap-2 text-xs font-semibold text-slate-900">
+              <ShieldCheck
+                className="w-4 h-4 text-sky-600 shrink-0"
+                aria-hidden="true"
+              />
+              <span>{isVi ? 'Quản trị TM-Lingo' : 'TM-Lingo Admin'}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void onStaffSignOut()}
+              title={isVi ? 'Đăng xuất quản trị' : 'Staff sign out'}
+              className="lg:hidden inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>{isVi ? 'Thoát' : 'Sign out'}</span>
+            </button>
           </div>
-          <h1 className="text-3xl font-bold text-slate-900">
-            {isVi ? 'Quản trị hệ thống TM-Lingo' : 'TM-Lingo System Administration'}
-          </h1>
-          <p className="text-base text-slate-600 leading-relaxed">
-            {isVi
-              ? 'Quản lý kho học liệu trên Supabase Storage, chiến dịch thông báo Web Push, năng lực đa ngôn ngữ và phân quyền giáo viên.'
-              : 'Manage Supabase Storage curriculum media, Web Push notification campaigns, language capabilities, and staff role permissions.'}
-          </p>
+          <div className="text-xs text-slate-600 space-y-0.5">
+            <p className="font-semibold text-slate-800 truncate">{roleLabel}</p>
+            <p className="text-slate-500 truncate">
+              {staffUser.email ?? staffUser.displayName ?? 'Staff'}
+            </p>
+          </div>
         </div>
 
-        <div
-          className="inline-flex items-center gap-1 p-1 bg-slate-100 rounded-xl"
+        <nav
           role="tablist"
           aria-label={isVi ? 'Phân hệ quản trị' : 'Administration modules'}
+          className="flex lg:flex-col gap-1 overflow-x-auto pb-1 lg:pb-0"
         >
           {tabs.map((tab) => {
             const Icon = tab.icon;
@@ -219,33 +326,150 @@ export function AdminWorkspace({
                 role="tab"
                 aria-selected={active}
                 onClick={() => setSection(tab.key)}
-                className={`inline-flex items-center gap-2 px-3.5 py-2 min-h-[40px] rounded-lg text-sm font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                className={`inline-flex items-center gap-2.5 px-3 py-2.5 min-h-[40px] rounded-xl text-sm font-semibold transition-colors whitespace-nowrap lg:w-full text-left cursor-pointer ${
                   active
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
+                    ? 'bg-sky-50 text-sky-900 border border-sky-200'
+                    : 'text-slate-600 border border-transparent hover:bg-slate-50 hover:text-slate-900'
                 }`}
               >
-                <Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
-                <span>{tab.label}</span>
+                <Icon
+                  className={`w-4 h-4 shrink-0 ${
+                    active ? 'text-sky-600' : 'text-slate-400'
+                  }`}
+                  aria-hidden="true"
+                />
+                <span className="truncate">{tab.label}</span>
               </button>
             );
           })}
+        </nav>
+
+        <div className="hidden lg:block pt-4 border-t border-slate-100">
+          <button
+            type="button"
+            onClick={() => void onStaffSignOut()}
+            className="w-full inline-flex items-center justify-center gap-2 px-3.5 py-2.5 min-h-[40px] rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+          >
+            <LogOut className="w-4 h-4" aria-hidden="true" />
+            <span>{isVi ? 'Đăng xuất quản trị' : 'Staff sign out'}</span>
+          </button>
         </div>
-      </div>
+      </aside>
+
+      {/* Main Content Pane */}
+      <div className="min-w-0 space-y-6">
+        <div className="border-b border-slate-200 pb-4 space-y-1">
+          <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">
+            {activeTabMeta?.label ??
+              (isVi
+                ? 'Quản trị hệ thống TM-Lingo'
+                : 'TM-Lingo System Administration')}
+          </h1>
+          <p className="text-sm text-slate-600 leading-relaxed max-w-2xl">
+            {isVi
+              ? 'Soạn bài học và truyện kể, quản lý thư viện học liệu, chiến dịch thông báo, cấu hình dịch vụ AI & lưu trữ, ngôn ngữ, giọng đọc và phân quyền nhân sự.'
+              : 'Author lessons and stories, manage the media library, notification campaigns, AI & storage connections, languages, voices, and staff permissions.'}
+          </p>
+        </div>
+
+      {section === 'overview' && (
+        <AdminDashboardOverview
+          interfaceLocale={interfaceLocale}
+          canManageUsers={canManageUsers}
+          languages={languages}
+          ageGroups={ageGroups}
+          mediaAssets={mediaAssets}
+          onNavigateSection={setSection}
+        />
+      )}
+
+      {section === 'cms' && (
+        <AdminCmsStudio
+          interfaceLocale={interfaceLocale}
+          canPublish={canPublishCms}
+          canHardDelete={isRoot}
+          languages={languages}
+          ageGroups={ageGroups}
+          mediaAssets={activeMedia}
+          onContentPublished={onContentPublished}
+          onMediaChanged={() => void onReloadMedia()}
+        />
+      )}
+
+      {section === 'story-sources' && (
+        <AdminStorySourcesPanel
+          interfaceLocale={interfaceLocale}
+          ageGroups={ageGroups}
+          canPublish={canPublishCms}
+          canHardDelete={isRoot}
+          onSourcesUpdated={onContentPublished}
+        />
+      )}
+
+      {section === 'age-groups' && (
+        <AdminAgeGroupsPanel
+          interfaceLocale={interfaceLocale}
+          canPublish={canPublishCms}
+          canHardDelete={isRoot}
+          onAgeGroupsUpdated={onAgeGroupsUpdated}
+        />
+      )}
 
       {section === 'notifications' && (
-        <NotificationManager interfaceLocale={interfaceLocale} embedded />
+        <NotificationManager
+          interfaceLocale={interfaceLocale}
+          canHardDelete={isRoot}
+          embedded
+        />
+      )}
+
+      {section === 'providers' && canManageProviders && (
+        <AdminProvidersPanel
+          interfaceLocale={interfaceLocale}
+          canHardDelete={isRoot}
+        />
       )}
 
       {section === 'media' && (
         <section className="rounded-2xl border border-slate-200 bg-white p-6 space-y-6">
-          <div className="space-y-1">
-            <h2 className="text-xl font-bold text-slate-900">
-              {messages.parent.mediaHeading}
-            </h2>
-            <p className="text-sm text-slate-600">
-              {messages.parent.mediaSubtitle}
-            </p>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="space-y-1">
+              <h2 className="text-xl font-bold text-slate-900">
+                {messages.parent.mediaHeading}
+              </h2>
+              <p className="text-sm text-slate-600">
+                {messages.parent.mediaSubtitle}{' '}
+                {isVi
+                  ? 'Lưu trữ giữ lại tệp để khôi phục khi cần; Xóa vĩnh viễn (chỉ quản trị cao nhất) sẽ gỡ bỏ hoàn toàn tệp.'
+                  : 'Archiving keeps the file for restore; Permanent Delete (Root only) removes the file completely.'}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setMediaView('active')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold tabular-nums cursor-pointer ${
+                    mediaView === 'active'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {isVi ? 'Đang dùng' : 'Active'} ({activeMedia.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMediaView('archived')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold tabular-nums cursor-pointer ${
+                    mediaView === 'archived'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {isVi ? 'Đã lưu trữ' : 'Archived'} ({archivedMedia.length})
+                </button>
+              </div>
+            </div>
           </div>
 
           <form
@@ -281,6 +505,11 @@ export function AdminWorkspace({
               </label>
             </div>
 
+            {mediaNotice && (
+              <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                {mediaNotice}
+              </p>
+            )}
             {mediaError && (
               <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                 {mediaError}
@@ -301,276 +530,142 @@ export function AdminWorkspace({
             </button>
           </form>
 
-          {mediaAssets.length === 0 ? (
-            <p className="text-sm text-slate-500">{messages.parent.mediaEmpty}</p>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search
+                className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2"
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                value={mediaSearch}
+                onChange={(e) => setMediaSearch(e.target.value)}
+                placeholder={
+                  isVi
+                    ? 'Tìm kiếm theo tên học liệu hoặc ngôn ngữ...'
+                    : 'Search media by title or language...'
+                }
+                className="w-full min-h-[40px] rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-900 focus:outline-none focus:border-sky-500"
+              />
+            </div>
+            <select
+              value={mediaKindFilter}
+              onChange={(e) =>
+                setMediaKindFilter(e.target.value as 'all' | 'image' | 'audio')
+              }
+              aria-label={isVi ? 'Lọc loại tệp' : 'Filter media kind'}
+              className="min-h-[40px] rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
+            >
+              <option value="all">
+                {isVi ? 'Tất cả định dạng' : 'All formats'}
+              </option>
+              <option value="image">{isVi ? 'Hình ảnh' : 'Images'}</option>
+              <option value="audio">{isVi ? 'Âm thanh' : 'Audio'}</option>
+            </select>
+          </div>
+
+          {visibleMedia.length === 0 ? (
+            <p className="text-sm text-slate-500">
+              {mediaSearch.trim() || mediaKindFilter !== 'all'
+                ? isVi
+                  ? 'Không tìm thấy học liệu phù hợp với bộ lọc hiện tại.'
+                  : 'No media assets match the current filter.'
+                : mediaView === 'archived'
+                  ? isVi
+                    ? 'Chưa có học liệu nào trong kho lưu trữ.'
+                    : 'No archived media assets.'
+                  : messages.parent.mediaEmpty}
+            </p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {mediaAssets.map((asset) => (
-                <div
-                  key={asset.id}
-                  className="rounded-xl border border-slate-200 p-3 space-y-2.5 bg-white"
-                >
-                  {asset.kind === 'image' ? (
-                    <div className="aspect-[16/10] rounded-lg overflow-hidden bg-slate-50 border border-slate-100">
-                      <img
-                        src={asset.publicUrl}
-                        alt={asset.title}
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                  ) : (
-                    <div className="rounded-lg bg-slate-50 border border-slate-100 p-3 space-y-2">
-                      <div className="flex items-center gap-2 text-xs font-medium text-slate-600">
-                        <Music className="w-4 h-4 text-sky-600" aria-hidden="true" />
-                        <span>Audio · {asset.locale.toUpperCase()}</span>
+              {visibleMedia.map((asset) => {
+                const isArchived = Boolean(asset.archivedAt);
+                return (
+                  <div
+                    key={asset.id}
+                    className={`rounded-xl border p-3 space-y-2.5 ${
+                      isArchived
+                        ? 'border-slate-200 bg-slate-50/70'
+                        : 'border-slate-200 bg-white'
+                    }`}
+                  >
+                    {asset.kind === 'image' ? (
+                      <div className="aspect-[16/10] rounded-lg overflow-hidden bg-slate-50 border border-slate-100">
+                        <img
+                          src={asset.publicUrl}
+                          alt={asset.title}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
                       </div>
-                      <audio controls src={asset.publicUrl} className="w-full h-9" />
-                    </div>
-                  )}
-
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-900 truncate flex items-center gap-1.5">
-                        {asset.kind === 'image' && (
-                          <ImageIcon
-                            className="w-3.5 h-3.5 text-slate-400 shrink-0"
+                    ) : (
+                      <div className="rounded-lg bg-slate-50 border border-slate-100 p-3 space-y-2">
+                        <div className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                          <Music
+                            className="w-4 h-4 text-sky-600"
                             aria-hidden="true"
                           />
-                        )}
-                        <span className="truncate">{asset.title}</span>
-                      </p>
-                      <p className="text-xs text-slate-500 tabular-nums">
-                        {(asset.sizeBytes / 1024).toFixed(0)} KB ·{' '}
-                        {asset.locale.toUpperCase()}
-                      </p>
+                          <span>Audio · {asset.locale.toUpperCase()}</span>
+                        </div>
+                        <audio
+                          controls
+                          src={asset.publicUrl}
+                          className="w-full h-9"
+                        />
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-900 truncate flex items-center gap-1.5">
+                          {asset.kind === 'image' && (
+                            <ImageIcon
+                              className="w-3.5 h-3.5 text-slate-400 shrink-0"
+                              aria-hidden="true"
+                            />
+                          )}
+                          <span className="truncate">{asset.title}</span>
+                        </p>
+                        <p className="text-xs text-slate-500 tabular-nums">
+                          {(asset.sizeBytes / 1024).toFixed(0)} KB ·{' '}
+                          {asset.locale.toUpperCase()}
+                        </p>
+                      </div>
+                      <div className="flex justify-end pt-1 border-t border-slate-100">
+                        <DeleteActionsControl
+                          isArchived={isArchived}
+                          isVi={isVi}
+                          busy={mediaActionId === asset.id}
+                          canHardDelete={isRoot}
+                          onDelete={(mode) => handleMediaDelete(asset.id, mode)}
+                          onRestore={() => handleMediaRestore(asset.id)}
+                        />
+                      </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => void onDeleteMedia(asset.id)}
-                      className="p-2 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
-                      aria-label={messages.parent.mediaDelete}
-                    >
-                      <Trash2 className="w-4 h-4" aria-hidden="true" />
-                    </button>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
       )}
 
       {section === 'languages' && (
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 space-y-5">
-          <div className="space-y-1">
-            <h2 className="text-xl font-bold text-slate-900">
-              {messages.parent.registryHeading}
-            </h2>
-            <p className="text-sm text-slate-600">
-              {isVi
-                ? 'Danh mục ngôn ngữ được tách độc lập giữa giao diện, nội dung học, giải thích và giọng đọc.'
-                : 'System locale capabilities separated cleanly across UI, learning content, explanation, and narration.'}
-            </p>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500">
-                  <th className="py-3 pr-4">{isVi ? 'Ngôn ngữ' : 'Language'}</th>
-                  <th className="py-3 px-4">Locale</th>
-                  <th className="py-3 px-4">UI</th>
-                  <th className="py-3 px-4">{isVi ? 'Học' : 'Learning'}</th>
-                  <th className="py-3 px-4">{isVi ? 'Giải thích' : 'Explanation'}</th>
-                  <th className="py-3 px-4">TTS</th>
-                  <th className="py-3 pl-4 text-right">{isVi ? 'Trạng thái' : 'Status'}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {languages.map((lang) => (
-                  <tr key={lang.locale}>
-                    <td className="py-3.5 pr-4 font-semibold text-slate-900">
-                      {lang.nativeName}{' '}
-                      <span className="font-normal text-slate-500">
-                        ({lang.displayName})
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4 font-mono text-xs text-slate-600">
-                      {lang.locale}
-                    </td>
-                    <td className="py-3.5 px-4 text-slate-700">
-                      {lang.uiEnabled ? 'Yes' : 'No'}
-                    </td>
-                    <td className="py-3.5 px-4 text-slate-700">
-                      {lang.learningEnabled ? 'Yes' : 'No'}
-                    </td>
-                    <td className="py-3.5 px-4 text-slate-700">
-                      {lang.explanationEnabled ? 'Yes' : 'No'}
-                    </td>
-                    <td className="py-3.5 px-4 text-slate-700">
-                      {lang.ttsEnabled ? 'Yes' : 'No'}
-                    </td>
-                    <td className="py-3.5 pl-4 text-right">
-                      <span
-                        className={`text-xs font-semibold ${
-                          lang.contentStatus === 'ready'
-                            ? 'text-emerald-700'
-                            : 'text-slate-500'
-                        }`}
-                      >
-                        {lang.contentStatus === 'ready'
-                          ? messages.parent.statusReady
-                          : messages.parent.statusPlanned}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
+        <AdminLanguagesPanel
+          interfaceLocale={interfaceLocale}
+          canHardDelete={isRoot}
+          onLanguagesUpdated={onLanguagesUpdated}
+        />
       )}
 
-      {section === 'users' && isAdmin && (
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 space-y-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="space-y-1">
-              <h2 className="text-xl font-bold text-slate-900">
-                {isVi ? 'Tài khoản & Phân quyền' : 'Users & Role Management'}
-              </h2>
-              <p className="text-sm text-slate-600">
-                {isVi
-                  ? 'Mọi tài khoản đăng ký mới hoặc đăng nhập bằng Google mặc định có vai trò Phụ huynh (Parent). Chỉ Quản trị viên mới có thể cấp quyền Giáo viên hoặc Quản trị viên.'
-                  : 'All public sign-ups and Google logins default to Parent. Only Administrators can promote accounts to Teacher or Administrator.'}
-              </p>
-            </div>
-            <button
-              type="button"
-              disabled={usersLoading}
-              onClick={() => void loadManagedUsers()}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
-            >
-              <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>{isVi ? 'Làm mới' : 'Refresh'}</span>
-            </button>
-          </div>
-
-          {usersNotice && (
-            <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-              {usersNotice}
-            </p>
-          )}
-          {usersError && (
-            <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-              {usersError}
-            </p>
-          )}
-
-          {usersLoading && managedUsers.length === 0 ? (
-            <p className="text-sm text-slate-500">
-              {isVi ? 'Đang tải danh sách tài khoản...' : 'Loading accounts...'}
-            </p>
-          ) : managedUsers.length === 0 ? (
-            <p className="text-sm text-slate-500">
-              {isVi ? 'Chưa có tài khoản nào trong hệ thống.' : 'No users found.'}
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500">
-                    <th className="py-3 pr-4">
-                      {isVi ? 'Tài khoản' : 'Account'}
-                    </th>
-                    <th className="py-3 px-4">
-                      {isVi ? 'Vai trò' : 'Role'}
-                    </th>
-                    <th className="py-3 px-4">
-                      {isVi ? 'Cập nhật gần nhất' : 'Last updated'}
-                    </th>
-                    <th className="py-3 pl-4 text-right">
-                      {isVi ? 'Phân quyền' : 'Assign role'}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {managedUsers.map((user) => {
-                    const isSelf = user.userId === authUser.id;
-                    const busy = updatingUserId === user.userId;
-                    return (
-                      <tr key={user.userId}>
-                        <td className="py-3.5 pr-4">
-                          <p className="font-semibold text-slate-900">
-                            {user.displayName ?? user.email ?? user.userId}
-                          </p>
-                          {user.email && (
-                            <p className="text-xs text-slate-500">{user.email}</p>
-                          )}
-                        </td>
-                        <td className="py-3.5 px-4">
-                          <span
-                            className={`text-xs font-semibold ${
-                              user.role === 'admin'
-                                ? 'text-sky-700'
-                                : user.role === 'teacher'
-                                  ? 'text-emerald-700'
-                                  : 'text-slate-600'
-                            }`}
-                          >
-                            {user.role === 'admin'
-                              ? messages.parent.roleAdmin
-                              : user.role === 'teacher'
-                                ? messages.parent.roleTeacher
-                                : messages.parent.roleParent}
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-4 text-xs text-slate-500 tabular-nums">
-                          {new Date(user.updatedAt).toLocaleDateString()}
-                        </td>
-                        <td className="py-3.5 pl-4 text-right">
-                          {isSelf ? (
-                            <span className="text-xs text-slate-400">
-                              {isVi ? 'Tài khoản hiện tại' : 'Current session'}
-                            </span>
-                          ) : (
-                            <select
-                              aria-label={
-                                isVi
-                                  ? `Phân quyền cho ${user.email ?? user.userId}`
-                                  : `Assign role for ${user.email ?? user.userId}`
-                              }
-                              disabled={busy}
-                              value={user.role}
-                              onChange={(e) =>
-                                void handleRoleChange(
-                                  user.userId,
-                                  e.target.value as UserRole
-                                )
-                              }
-                              className="min-h-[36px] rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-800 disabled:opacity-50"
-                            >
-                              <option value="parent">
-                                {messages.parent.roleParent} (parent)
-                              </option>
-                              <option value="teacher">
-                                {messages.parent.roleTeacher} (teacher)
-                              </option>
-                              <option value="admin">
-                                {messages.parent.roleAdmin} (admin)
-                              </option>
-                            </select>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
+      {section === 'users' && canManageUsers && (
+        <AdminAuditPanel
+          authUser={staffUser}
+          interfaceLocale={interfaceLocale}
+          messages={messages}
+        />
       )}
+      </div>
     </div>
   );
 }

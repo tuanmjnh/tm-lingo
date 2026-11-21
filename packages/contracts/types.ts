@@ -2,6 +2,8 @@ export type Direction = 'ltr' | 'rtl';
 
 export type ContentStatus = 'ready' | 'partial' | 'planned';
 
+export type DeleteMode = 'soft' | 'hard';
+
 export interface LocaleConfig {
   locale: string;
   languageCode: string;
@@ -16,6 +18,7 @@ export interface LocaleConfig {
   speechRecognitionEnabled: boolean;
   contentStatus: ContentStatus;
   fallbackLocale: string | null;
+  archivedAt?: string | null;
 }
 
 export type ExperienceMode =
@@ -26,16 +29,80 @@ export type ExperienceMode =
   | 'story'
   | 'explore';
 
+export type AgeGroupStage =
+  | 'preschool'
+  | 'primary_lower'
+  | 'primary_upper'
+  | 'middle_school'
+  | 'high_school'
+  | 'custom';
+
+export type LearningLevel =
+  | 'starter'
+  | 'foundation'
+  | 'elementary'
+  | 'intermediate'
+  | 'upper_intermediate'
+  | 'advanced';
+
+export interface AgeGroupUiProfile {
+  visualDensity: 'low' | 'medium' | 'high';
+  typographyScale: 'large' | 'comfortable' | 'standard';
+  touchTarget: 'xl' | 'lg' | 'md';
+  accentTone: 'sky' | 'emerald' | 'amber' | 'indigo' | 'violet';
+  illustrationEmphasis: 'picture-first' | 'balanced' | 'text-focused';
+  showPhoneticsByDefault: boolean;
+  showBilingualExplanation: boolean;
+  defaultAudioSpeed: number;
+  defaultDailyMinutes: number;
+  recommendedModes: ExperienceMode[];
+  interactionPacing: 'child-led' | 'guided-step' | 'self-paced';
+  gamificationStyle: 'gentle-stars' | 'badges-streaks' | 'progress-metrics';
+}
+
+export interface AgeGroupConfig {
+  id: string;
+  stage: AgeGroupStage;
+  minAge: number;
+  maxAge: number;
+  grades: number[];
+  gradeRange: {
+    vi: string;
+    en: string;
+  };
+  displayNames: {
+    vi: string;
+    en: string;
+  };
+  shortLabels: {
+    vi: string;
+    en: string;
+  };
+  descriptions: {
+    vi: string;
+    en: string;
+  };
+  cefrRange: string;
+  defaultLearningLevel: LearningLevel;
+  contentStatus: ContentStatus;
+  enabled: boolean;
+  sortOrder: number;
+  uiProfile: AgeGroupUiProfile;
+  isSystem?: boolean;
+  archivedAt?: string | null;
+  updatedAt?: string;
+}
+
 export interface ExperiencePreset {
   id: string;
   mode: ExperienceMode;
-  visualDensity: 'low' | 'medium';
+  visualDensity: 'low' | 'medium' | 'high';
   animationLevel: 'none' | 'gentle' | 'moderate';
   audioGuidance: boolean;
   showCaptions: boolean;
   allowReplay: boolean;
   reducedMotionCompatible: boolean;
-  interactionPacing: 'child-led';
+  interactionPacing: 'child-led' | 'guided-step' | 'self-paced';
 }
 
 export interface LearnerPreferences {
@@ -54,9 +121,11 @@ export interface LearnerProfile {
   parentAccountId: string;
   nickname: string;
   ageYears: number;
-  ageBand: '3-5';
+  ageBand: string;
+  gradeLevel?: number | null;
   avatarTone: 'sky' | 'amber' | 'emerald' | 'rose';
   preferences: LearnerPreferences;
+  archivedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -66,6 +135,7 @@ export interface ConceptLocalization {
   example: string;
   explanation: string;
   pronunciationGuide?: string;
+  audioUrl?: string;
 }
 
 export interface VocabularyConcept {
@@ -77,6 +147,7 @@ export interface VocabularyConcept {
 
 export type ActivityRendererType =
   | 'flashcard'
+  | 'repeat-after-me'
   | 'listen-and-select'
   | 'picture-choice'
   | 'match-pair';
@@ -95,8 +166,10 @@ export interface PublicActivity {
   schemaVersion: number;
   promptText: string;
   promptExplanation: string;
+  pronunciationGuide?: string;
   spokenText: string;
   spokenLocale: string;
+  spokenAudioUrl?: string;
   conceptId?: string;
   options: ActivityOption[];
   pairs?: Array<{
@@ -107,19 +180,35 @@ export interface PublicActivity {
   }>;
 }
 
+export type PublicationWorkflowStatus =
+  | 'draft'
+  | 'in_review'
+  | 'published'
+  | 'archived';
+
 export interface LearningPackageSummary {
   id: string;
   schemaVersion: number;
   topicId: string;
   ageBand: string[];
-  learningLevel: 'starter';
+  learningLevel: LearningLevel;
   learningLocales: string[];
   explanationLocales: string[];
   availableExperienceModes: ExperienceMode[];
   titles: Record<string, string>;
   summaries: Record<string, string>;
   conceptCount: number;
-  status: 'published' | 'draft';
+  status: PublicationWorkflowStatus;
+  publishedVersion?: number;
+  archivedAt?: string | null;
+  updatedAt?: string;
+}
+
+export interface CmsLearningPackage extends LearningPackageSummary {
+  concepts: VocabularyConcept[];
+  createdAt: string;
+  updatedAt: string;
+  publishedSnapshotId?: string | null;
 }
 
 export interface ResolvedLessonPayload {
@@ -175,6 +264,7 @@ export interface VoiceProfile {
   ageAppropriate: boolean;
   pitch: number;
   defaultRate: number;
+  archivedAt?: string | null;
 }
 
 export interface StorySegment {
@@ -184,6 +274,7 @@ export interface StorySegment {
   conceptRef?: string;
   textByLocale: Record<string, string>;
   explanationByLocale: Record<string, string>;
+  audioUrlByLocale?: Record<string, string>;
 }
 
 export interface StoryBook {
@@ -197,7 +288,15 @@ export interface StoryBook {
   titles: Record<string, string>;
   summaries: Record<string, string>;
   segments: StorySegment[];
-  status: 'published' | 'draft';
+  status: PublicationWorkflowStatus;
+  publishedVersion?: number;
+  category?: StoryCategoryKey;
+  sourceId?: string;
+  sourceName?: string;
+  externalId?: string;
+  author?: string;
+  archivedAt?: string | null;
+  updatedAt?: string;
 }
 
 export interface StoryReadingPosition {
@@ -206,6 +305,50 @@ export interface StoryReadingPosition {
   narrationLocale: string;
   segmentIndex: number;
   updatedAt: string;
+}
+
+export interface PublicationSnapshotRecord {
+  snapshotId: string;
+  entityType: 'package' | 'story';
+  entityId: string;
+  version: number;
+  publishedBy: string;
+  publishedAt: string;
+  payload: CmsLearningPackage | StoryBook;
+}
+
+export interface GenerationJobRecord {
+  id: string;
+  kind: 'package' | 'story';
+  operationType?: 'origin' | 'translate' | 'adapt' | 'safety_review';
+  topic: string;
+  learningLocale: string;
+  explanationLocale: string;
+  providerUsed: string;
+  modelUsed: string;
+  status: 'completed' | 'failed';
+  createdEntityId?: string;
+  errorMessage?: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface SafetyReviewCheck {
+  criterion: string;
+  passed: boolean;
+  note: string;
+}
+
+export interface SafetyReviewResult {
+  passed: boolean;
+  score: number;
+  ageReadiness: 'excellent' | 'good' | 'needs_revision';
+  summary: string;
+  checks: SafetyReviewCheck[];
+  suggestions: string[];
+  providerUsed: string;
+  modelUsed: string;
+  reviewedAt: string;
 }
 
 export type NotificationCategory =
@@ -228,6 +371,7 @@ export interface NotificationCampaign {
   sentCount: number;
   failedCount: number;
   lastSentAt: string | null;
+  archivedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -260,7 +404,9 @@ export interface AuthUserProfile {
   email: string | null;
   displayName: string | null;
   role: UserRole;
-  provider: 'supabase';
+  provider: 'firebase' | 'tm-hub' | 'local-staff';
+  roles?: string[];
+  capabilities?: string[];
 }
 
 export interface ManagedUserRecord {
@@ -268,8 +414,31 @@ export interface ManagedUserRecord {
   email: string;
   displayName: string | null;
   role: UserRole;
+  roles?: string[];
+  isActive?: boolean;
+  source?: 'tm-hub' | 'local';
   createdAt: string;
   updatedAt: string;
+}
+
+export interface StaffRoleRecord {
+  id: string;
+  name: string;
+  description?: string;
+  permissions: string[];
+  isSystem?: boolean;
+}
+
+export interface StaffAuditLogEntry {
+  id: string;
+  action: string;
+  modelName: string;
+  docId: string;
+  actorName: string;
+  actorEmail?: string;
+  summary: string;
+  source: 'tm-hub' | 'tm-lingo-local';
+  at: string;
 }
 
 export interface MediaAssetRecord {
@@ -283,6 +452,151 @@ export interface MediaAssetRecord {
   storageBucket: string;
   storagePath: string;
   publicUrl: string;
+  storageProvider?: string;
+  storageConnectionId?: string;
+  archivedAt?: string | null;
   createdAt: string;
 }
 
+export interface AIProviderModelView {
+  modelId: string;
+  displayName: string;
+  enabled: boolean;
+  isPrimary?: boolean;
+  discoveredAt?: string;
+}
+
+export interface AIProviderConnectionView {
+  connectionId: string;
+  providerKey: string;
+  providerName: string;
+  baseUrl: string;
+  hasKey: boolean;
+  enabled: boolean;
+  models: AIProviderModelView[];
+  source: 'mongodb' | 'env-fallback';
+  archivedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type StorageProviderKind = 'cloudflare_r2' | 'aws_s3' | 's3_compatible';
+
+export interface StorageConnectionView {
+  connectionId: string;
+  name: string;
+  provider: StorageProviderKind;
+  endpoint: string;
+  region: string;
+  bucket: string;
+  publicBaseUrl: string;
+  pathPrefix: string;
+  hasCredentials: boolean;
+  isDefault: boolean;
+  enabled: boolean;
+  lastTestOk: boolean | null;
+  lastTestAt: string | null;
+  lastTestMessage?: string | null;
+  source: 'mongodb' | 'env-fallback';
+  archivedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ParentConsentPurpose =
+  | 'child_profile_storage'
+  | 'learning_progress_sync'
+  | 'web_push_reminders';
+
+export interface ParentConsentRecord {
+  purpose: ParentConsentPurpose;
+  granted: boolean;
+  policyVersion: string;
+  recordedAt: string;
+}
+
+export interface ParentPrivacySummary {
+  parentAccountId: string;
+  policyVersion: string;
+  consents: ParentConsentRecord[];
+  consentHistoryCount: number;
+  learnerCount: number;
+  progressCount: number;
+  storyPositionCount: number;
+  archivedAt: string | null;
+}
+
+export interface ParentDataExportPayload {
+  exportedAt: string;
+  policyVersion: string;
+  parentAccountId: string;
+  consents: ParentConsentRecord[];
+  learners: LearnerProfile[];
+  lessonProgress: LessonProgressRecord[];
+  storyPositions: StoryReadingPosition[];
+}
+
+export type StoryCategoryKey =
+  | 'fables'
+  | 'animals'
+  | 'bedtime'
+  | 'adventure'
+  | 'science'
+  | 'life-skills'
+  | 'classics';
+
+export type StorySourceAdapterType =
+  | 'curated_library'
+  | 'gutendex'
+  | 'rss'
+  | 'json_catalog';
+
+export interface StorySourceConfig {
+  id: string;
+  name: {
+    vi: string;
+    en: string;
+  };
+  description: {
+    vi: string;
+    en: string;
+  };
+  adapterType: StorySourceAdapterType;
+  baseUrl: string;
+  categories: StoryCategoryKey[];
+  ageBands: string[];
+  defaultLocale: string;
+  supportedLocales: string[];
+  enabled: boolean;
+  sortOrder: number;
+  isSystem?: boolean;
+  lastTestedAt?: string | null;
+  lastTestStatus?: 'ok' | 'error' | null;
+  lastTestMessage?: string | null;
+  lastItemCount?: number | null;
+  archivedAt?: string | null;
+  updatedAt?: string;
+}
+
+export interface ExternalStoryCatalogItem {
+  externalId: string;
+  sourceId: string;
+  sourceName: {
+    vi: string;
+    en: string;
+  };
+  adapterType: StorySourceAdapterType;
+  title: string;
+  titleVi?: string;
+  author?: string;
+  summary: string;
+  summaryVi?: string;
+  category: StoryCategoryKey;
+  ageBands: string[];
+  locale: string;
+  availableLocales: string[];
+  coverAssetRef: string;
+  hasAudio?: boolean;
+  estimatedMinutes?: number;
+  alreadyImportedStoryId?: string | null;
+}

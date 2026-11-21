@@ -13,6 +13,10 @@ import type {
   VoiceProfile,
 } from '../../packages/contracts/types';
 import { getMongoCollection } from '../db/mongo';
+import {
+  getAgeGroupById,
+  resolveAgeGroupForAge,
+} from './ageGroupRepository';
 
 export const LANGUAGE_REGISTRY: LocaleConfig[] = [
   {
@@ -230,7 +234,14 @@ export const LEARNING_PACKAGES: LearningPackageSummary[] = [
     learningLevel: 'starter',
     learningLocales: ['en'],
     explanationLocales: ['vi', 'en'],
-    availableExperienceModes: ['guided', 'flashcards', 'listening', 'game', 'story'],
+    availableExperienceModes: [
+      'guided',
+      'flashcards',
+      'listening',
+      'game',
+      'explore',
+      'story',
+    ],
     titles: {
       en: 'Fruit Time',
       vi: 'Giờ khám phá Trái cây',
@@ -347,6 +358,7 @@ function buildStarterLearner(parentAccountId: string): LearnerProfile {
     nickname: 'Bé Min',
     ageYears: 4,
     ageBand: '3-5',
+    gradeLevel: 0,
     avatarTone: 'sky',
     preferences: {
       interfaceLocale: 'vi',
@@ -376,8 +388,7 @@ export class LingoRepository {
   private storyPositions: Map<string, StoredStoryPositionDoc> = new Map();
 
   constructor() {
-    const starter = buildStarterLearner(DEFAULT_PARENT_ID);
-    this.learners.set(starter.id, starter);
+    // Accounts start clean with zero demo learners until the user creates a profile.
   }
 
   getLanguages(): LocaleConfig[] {
@@ -400,32 +411,21 @@ export class LingoRepository {
   async listLearners(parentAccountId = DEFAULT_PARENT_ID): Promise<LearnerProfile[]> {
     const col = await getMongoCollection<LearnerProfile>('learners');
     if (col) {
-      const existing = await col
-        .find({ parentAccountId }, { projection: { _id: 0 } })
+      return col
+        .find(
+          {
+            parentAccountId,
+            $or: [{ archivedAt: null }, { archivedAt: { $exists: false } }],
+          },
+          { projection: { _id: 0 } }
+        )
         .sort({ createdAt: 1 })
         .toArray();
-
-      if (existing.length > 0) {
-        return existing;
-      }
-
-      const starter = buildStarterLearner(parentAccountId);
-      await col.updateOne(
-        { id: starter.id },
-        { $setOnInsert: starter },
-        { upsert: true }
-      );
-      return [starter];
     }
 
-    const local = Array.from(this.learners.values()).filter(
-      (l) => l.parentAccountId === parentAccountId
+    return Array.from(this.learners.values()).filter(
+      (l) => l.parentAccountId === parentAccountId && !l.archivedAt
     );
-    if (local.length > 0) return local;
-
-    const starter = buildStarterLearner(parentAccountId);
-    this.learners.set(starter.id, starter);
-    return [starter];
   }
 
   async createLearner(
@@ -433,6 +433,8 @@ export class LingoRepository {
     input: {
       nickname: string;
       ageYears: number;
+      ageBand?: string;
+      gradeLevel?: number | null;
       avatarTone: LearnerProfile['avatarTone'];
       interfaceLocale: string;
       learningLocale: string;
@@ -442,13 +444,25 @@ export class LingoRepository {
   ): Promise<LearnerProfile> {
     const now = new Date().toISOString();
     const id = `learner-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
+    const resolvedGroup =
+      (input.ageBand ? await getAgeGroupById(input.ageBand) : null) ??
+      (await resolveAgeGroupForAge(input.ageYears, input.gradeLevel));
+
+    const inferredGrade =
+      input.gradeLevel !== undefined
+        ? input.gradeLevel
+        : input.ageYears >= 6
+          ? Math.min(12, Math.max(1, input.ageYears - 5))
+          : 0;
+
     const profile: LearnerProfile = {
       id,
-      schemaVersion: 1,
+      schemaVersion: 2,
       parentAccountId,
       nickname: input.nickname.trim(),
       ageYears: input.ageYears,
-      ageBand: '3-5',
+      ageBand: resolvedGroup.id,
+      gradeLevel: inferredGrade,
       avatarTone: input.avatarTone,
       preferences: {
         interfaceLocale: input.interfaceLocale,
@@ -456,8 +470,8 @@ export class LingoRepository {
         explanationLocale: input.explanationLocale,
         narrationLocale: input.narrationLocale,
         reducedMotion: false,
-        dailyMinutesLimit: 15,
-        audioSpeed: 0.9,
+        dailyMinutesLimit: resolvedGroup.uiProfile.defaultDailyMinutes,
+        audioSpeed: resolvedGroup.uiProfile.defaultAudioSpeed,
       },
       createdAt: now,
       updatedAt: now,
@@ -469,6 +483,80 @@ export class LingoRepository {
       await col.insertOne({ ...profile });
     }
     return profile;
+  }
+
+  async updateLearnerProfile(
+    parentAccountId: string,
+    learnerId: string,
+    patch: {
+      nickname?: string;
+      ageYears?: number;
+      ageBand?: string;
+      gradeLevel?: number | null;
+      avatarTone?: LearnerProfile['avatarTone'];
+      applyAgeGroupDefaults?: boolean;
+    }
+  ): Promise<LearnerProfile | undefined> {
+    const col = await getMongoCollection<LearnerProfile>('learners');
+    const existing = col
+      ? await col.findOne(
+          { id: learnerId, parentAccountId },
+          { projection: { _id: 0 } }
+        )
+      : this.learners.get(learnerId);
+
+    if (!existing || existing.parentAccountId !== parentAccountId) {
+      return undefined;
+    }
+
+    const nextAgeYears = patch.ageYears ?? existing.ageYears;
+    const nextGradeLevel =
+      patch.gradeLevel !== undefined ? patch.gradeLevel : existing.gradeLevel;
+
+    const resolvedGroup =
+      (patch.ageBand ? await getAgeGroupById(patch.ageBand) : null) ??
+      (patch.ageYears !== undefined || patch.gradeLevel !== undefined
+        ? await resolveAgeGroupForAge(nextAgeYears, nextGradeLevel)
+        : (await getAgeGroupById(existing.ageBand)) ??
+          (await resolveAgeGroupForAge(nextAgeYears, nextGradeLevel)));
+
+    const nextPreferences = patch.applyAgeGroupDefaults
+      ? {
+          ...existing.preferences,
+          dailyMinutesLimit: resolvedGroup.uiProfile.defaultDailyMinutes,
+          audioSpeed: resolvedGroup.uiProfile.defaultAudioSpeed,
+        }
+      : existing.preferences;
+
+    const updated: LearnerProfile = {
+      ...existing,
+      nickname: patch.nickname?.trim() || existing.nickname,
+      ageYears: nextAgeYears,
+      ageBand: resolvedGroup.id,
+      gradeLevel: nextGradeLevel ?? null,
+      avatarTone: patch.avatarTone ?? existing.avatarTone,
+      preferences: nextPreferences,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (col) {
+      await col.updateOne(
+        { id: learnerId, parentAccountId },
+        {
+          $set: {
+            nickname: updated.nickname,
+            ageYears: updated.ageYears,
+            ageBand: updated.ageBand,
+            gradeLevel: updated.gradeLevel,
+            avatarTone: updated.avatarTone,
+            preferences: updated.preferences,
+            updatedAt: updated.updatedAt,
+          },
+        }
+      );
+    }
+    this.learners.set(learnerId, updated);
+    return updated;
   }
 
   async updateLearnerPreferences(

@@ -28,7 +28,7 @@ export function PWAInstallButton({
         className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[42px] rounded-xl bg-sky-600 text-white text-sm font-semibold hover:bg-sky-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
       >
         <Download className="w-4 h-4" aria-hidden="true" />
-        <span>{isVi ? 'Cài ứng dụng (PWA)' : 'Install App'}</span>
+        <span>{isVi ? 'Cài ứng dụng' : 'Install App'}</span>
       </button>
     );
   }

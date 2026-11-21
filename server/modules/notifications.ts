@@ -183,21 +183,27 @@ class NotificationService {
     return localDeleted;
   }
 
-  async listCampaigns(): Promise<NotificationCampaign[]> {
+  async listCampaigns(options?: {
+    includeArchived?: boolean;
+  }): Promise<NotificationCampaign[]> {
     await this.ensureSeedCampaignsInMongo();
+    const includeArchived = Boolean(options?.includeArchived);
     const col = await getMongoCollection<NotificationCampaign>(
       'notification_campaigns'
     );
     if (col) {
+      const filter = includeArchived
+        ? {}
+        : { $or: [{ archivedAt: null }, { archivedAt: { $exists: false } }] };
       return col
-        .find({}, { projection: { _id: 0 } })
+        .find(filter, { projection: { _id: 0 } })
         .sort({ updatedAt: -1 })
         .toArray();
     }
 
-    return Array.from(this.campaigns.values()).sort((a, b) =>
-      b.updatedAt.localeCompare(a.updatedAt)
-    );
+    return Array.from(this.campaigns.values())
+      .filter((c) => includeArchived || !c.archivedAt)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   async listDeliveryLogs(): Promise<NotificationDeliveryLog[]> {
@@ -291,16 +297,68 @@ class NotificationService {
     return updated;
   }
 
-  async deleteCampaign(id: string): Promise<boolean> {
-    const localDeleted = this.campaigns.delete(id);
+  async deleteCampaign(
+    id: string,
+    mode: 'soft' | 'hard' = 'soft'
+  ): Promise<{ ok: boolean; mode: 'soft' | 'hard'; campaign?: NotificationCampaign }> {
     const col = await getMongoCollection<NotificationCampaign>(
       'notification_campaigns'
     );
-    if (col) {
-      const res = await col.deleteOne({ id });
-      return res.deletedCount > 0 || localDeleted;
+
+    if (mode === 'hard') {
+      const localDeleted = this.campaigns.delete(id);
+      if (col) {
+        const res = await col.deleteOne({ id });
+        return { ok: res.deletedCount > 0 || localDeleted, mode: 'hard' };
+      }
+      return { ok: localDeleted, mode: 'hard' };
     }
-    return localDeleted;
+
+    const existing = col
+      ? await col.findOne({ id }, { projection: { _id: 0 } })
+      : this.campaigns.get(id) ?? null;
+    if (!existing) return { ok: false, mode: 'soft' };
+
+    const now = new Date().toISOString();
+    const archived: NotificationCampaign = {
+      ...existing,
+      archivedAt: now,
+      updatedAt: now,
+    };
+    this.campaigns.set(id, archived);
+    if (col) {
+      await col.updateOne(
+        { id },
+        { $set: { archivedAt: now, updatedAt: now } }
+      );
+    }
+    return { ok: true, mode: 'soft', campaign: archived };
+  }
+
+  async restoreCampaign(id: string): Promise<NotificationCampaign | null> {
+    const col = await getMongoCollection<NotificationCampaign>(
+      'notification_campaigns'
+    );
+    const existing = col
+      ? await col.findOne({ id }, { projection: { _id: 0 } })
+      : this.campaigns.get(id) ?? null;
+    if (!existing) return null;
+
+    const now = new Date().toISOString();
+    const restored: NotificationCampaign = {
+      ...existing,
+      status: existing.status === 'sent' ? 'draft' : existing.status,
+      archivedAt: null,
+      updatedAt: now,
+    };
+    this.campaigns.set(id, restored);
+    if (col) {
+      await col.updateOne(
+        { id },
+        { $set: { status: restored.status, archivedAt: null, updatedAt: now } }
+      );
+    }
+    return restored;
   }
 
   async sendCampaign(id: string): Promise<{

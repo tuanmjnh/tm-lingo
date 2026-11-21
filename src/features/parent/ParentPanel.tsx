@@ -1,22 +1,40 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
+  Archive,
+  Calendar,
   Check,
-  ChevronRight,
+  Download,
+  Flame,
+  Globe,
+  GraduationCap,
+  Lock,
   LogIn,
   LogOut,
   Plus,
-  ShieldCheck,
+  Trash2,
   User,
   UserPlus,
+  Volume2,
 } from 'lucide-react';
 import type {
+  AgeGroupConfig,
   AuthUserProfile,
   LearnerPreferences,
   LearnerProfile,
   LessonProgressRecord,
   LocaleConfig,
+  ParentConsentPurpose,
+  ParentPrivacySummary,
 } from '../../../packages/contracts/types';
 import type { UiMessages } from '../../i18n/messages';
+import { apiClient } from '../../shared/apiClient';
+import { speakText } from '../../audio/speechPlayer';
+import {
+  computeLast7Days,
+  isParentalGateEnabled,
+  loadLearnerRewards,
+  setParentalGateEnabled,
+} from '../../lib/learnerRewards';
 
 interface ParentPanelProps {
   authUser: AuthUserProfile | null;
@@ -31,9 +49,9 @@ interface ParentPanelProps {
     displayName: string
   ) => Promise<void>;
   onSignOut: () => Promise<void>;
-  onOpenAdmin: () => void;
   learners: LearnerProfile[];
   activeLearner: LearnerProfile;
+  ageGroups: AgeGroupConfig[];
   languages: LocaleConfig[];
   progressRecords: LessonProgressRecord[];
   messages: UiMessages;
@@ -41,9 +59,22 @@ interface ParentPanelProps {
   onCreateLearner: (payload: {
     nickname: string;
     ageYears: number;
+    ageBand?: string;
+    gradeLevel?: number | null;
     avatarTone: LearnerProfile['avatarTone'];
   }) => Promise<void>;
+  onUpdateLearnerProfile: (
+    learnerId: string,
+    patch: {
+      nickname?: string;
+      ageYears?: number;
+      ageBand?: string;
+      gradeLevel?: number | null;
+      applyAgeDefaults?: boolean;
+    }
+  ) => Promise<void>;
   onUpdatePreferences: (patch: Partial<LearnerPreferences>) => Promise<void>;
+  onFamilyDataChanged: () => Promise<void>;
 }
 
 const AVATAR_STYLES: Record<LearnerProfile['avatarTone'], string> = {
@@ -62,28 +93,201 @@ export function ParentPanel({
   onSignInEmail,
   onSignUpEmail,
   onSignOut,
-  onOpenAdmin,
   learners,
   activeLearner,
+  ageGroups,
   languages,
   progressRecords,
   messages,
   onSelectLearner,
   onCreateLearner,
+  onUpdateLearnerProfile,
   onUpdatePreferences,
+  onFamilyDataChanged,
 }: ParentPanelProps) {
+  const isVi = activeLearner.preferences.interfaceLocale === 'vi';
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [nickname, setNickname] = useState('');
   const [ageYears, setAgeYears] = useState(4);
+  const [gradeLevel, setGradeLevel] = useState<number>(0);
   const [avatarTone, setAvatarTone] =
     useState<LearnerProfile['avatarTone']>('emerald');
   const [saving, setSaving] = useState(false);
   const [savedNotice, setSavedNotice] = useState(false);
 
+  // Active learner K-12 profile edit controls
+  const [editAgeYears, setEditAgeYears] = useState(activeLearner.ageYears);
+  const [editGradeLevel, setEditGradeLevel] = useState<number>(
+    activeLearner.gradeLevel ?? (activeLearner.ageYears <= 5 ? 0 : Math.min(12, Math.max(1, activeLearner.ageYears - 5)))
+  );
+  const [editAgeBand, setEditAgeBand] = useState(activeLearner.ageBand);
+  const [applyAgeDefaults, setApplyAgeDefaults] = useState(true);
+  const [profileSaved, setProfileSaved] = useState(false);
+
+  // Parental Gate local toggle
+  const [gateEnabled, setGateEnabled] = useState(false);
+  useEffect(() => {
+    setGateEnabled(isParentalGateEnabled());
+  }, []);
+
+  useEffect(() => {
+    setEditAgeYears(activeLearner.ageYears);
+    setEditGradeLevel(
+      activeLearner.gradeLevel ??
+        (activeLearner.ageYears <= 5
+          ? 0
+          : Math.min(12, Math.max(1, activeLearner.ageYears - 5)))
+    );
+    setEditAgeBand(activeLearner.ageBand);
+  }, [
+    activeLearner.id,
+    activeLearner.ageYears,
+    activeLearner.gradeLevel,
+    activeLearner.ageBand,
+  ]);
+
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
+
+  // Child Privacy & Data Control state
+  const [privacy, setPrivacy] = useState<ParentPrivacySummary | null>(null);
+  const [privacyBusy, setPrivacyBusy] = useState(false);
+  const [privacyNotice, setPrivacyNotice] = useState<string | null>(null);
+  const [privacyError, setPrivacyError] = useState<string | null>(null);
+  const [confirmSoftArchive, setConfirmSoftArchive] = useState(false);
+  const [showHardDeleteBox, setShowHardDeleteBox] = useState(false);
+  const [hardDeletePhrase, setHardDeletePhrase] = useState('');
+
+  const loadPrivacy = useCallback(async () => {
+    if (!authUser) {
+      setPrivacy(null);
+      return;
+    }
+    try {
+      const res = await apiClient.getParentPrivacy();
+      setPrivacy(res.privacy);
+    } catch {
+      setPrivacy(null);
+    }
+  }, [authUser]);
+
+  useEffect(() => {
+    void loadPrivacy();
+  }, [loadPrivacy]);
+
+  const getConsentState = (purpose: ParentConsentPurpose): boolean => {
+    const records = (privacy?.consents ?? []).filter(
+      (c) => c.purpose === purpose
+    );
+    if (records.length === 0) return purpose !== 'web_push_reminders';
+    return records[records.length - 1].granted;
+  };
+
+  const handleToggleConsent = async (
+    purpose: ParentConsentPurpose,
+    granted: boolean
+  ) => {
+    setPrivacyBusy(true);
+    setPrivacyError(null);
+    setPrivacyNotice(null);
+    try {
+      const res = await apiClient.recordParentConsent(purpose, granted);
+      setPrivacy(res.privacy);
+      setPrivacyNotice(
+        isVi
+          ? 'Đã ghi nhận lựa chọn đồng thuận vào sổ nhật ký quyền riêng tư.'
+          : 'Recorded consent preference in the privacy ledger.'
+      );
+    } catch (err) {
+      setPrivacyError(
+        err instanceof Error ? err.message : 'Unable to update consent'
+      );
+    } finally {
+      setPrivacyBusy(false);
+    }
+  };
+
+  const handleExportFamilyData = async () => {
+    setPrivacyBusy(true);
+    setPrivacyError(null);
+    setPrivacyNotice(null);
+    try {
+      const { exportData } = await apiClient.exportParentData();
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `tm-lingo-family-data-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setPrivacyNotice(
+        isVi
+          ? 'Đã xuất và tải xuống bản sao dữ liệu gia đình.'
+          : 'Exported and downloaded a copy of your family data.'
+      );
+    } catch (err) {
+      setPrivacyError(
+        err instanceof Error ? err.message : 'Unable to export data'
+      );
+    } finally {
+      setPrivacyBusy(false);
+    }
+  };
+
+  const handleSoftArchiveFamily = async () => {
+    setPrivacyBusy(true);
+    setPrivacyError(null);
+    setPrivacyNotice(null);
+    try {
+      const { result } = await apiClient.deleteParentData('soft');
+      setConfirmSoftArchive(false);
+      setPrivacyNotice(
+        isVi
+          ? `Đã lưu trữ (xóa mềm) ${result.affectedLearners} hồ sơ bé.`
+          : `Archived (soft-deleted) ${result.affectedLearners} child profile(s).`
+      );
+      await loadPrivacy();
+      await onFamilyDataChanged();
+    } catch (err) {
+      setPrivacyError(
+        err instanceof Error ? err.message : 'Unable to archive data'
+      );
+    } finally {
+      setPrivacyBusy(false);
+    }
+  };
+
+  const handleHardDeleteFamily = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (hardDeletePhrase.trim().toUpperCase() !== 'DELETE') return;
+    setPrivacyBusy(true);
+    setPrivacyError(null);
+    setPrivacyNotice(null);
+    try {
+      const { result } = await apiClient.deleteParentData('hard', 'DELETE');
+      setHardDeletePhrase('');
+      setShowHardDeleteBox(false);
+      setPrivacyNotice(
+        isVi
+          ? `Đã xóa vĩnh viễn ${result.affectedLearners} hồ sơ bé và ${result.deletedProgress} bản ghi tiến độ.`
+          : `Permanently deleted ${result.affectedLearners} child profile(s) and ${result.deletedProgress} progress record(s).`
+      );
+      await loadPrivacy();
+      await onFamilyDataChanged();
+    } catch (err) {
+      setPrivacyError(
+        err instanceof Error ? err.message : 'Unable to permanently delete data'
+      );
+    } finally {
+      setPrivacyBusy(false);
+    }
+  };
 
   const uiLocales = languages.filter((l) => l.enabled && l.uiEnabled);
   const learningLocales = languages.filter((l) => l.enabled && l.learningEnabled);
@@ -103,14 +307,25 @@ export function ParentPanel({
     }
   };
 
+  const matchAgeGroup = (years: number): AgeGroupConfig | undefined =>
+    ageGroups.find((g) => years >= g.minAge && years <= g.maxAge) ?? ageGroups[0];
+
+  const getGradeLabel = (grade: number | null | undefined): string => {
+    if (!grade || grade <= 0) return isVi ? 'Mầm non' : 'Pre-K';
+    return isVi ? `Lớp ${grade}` : `Grade ${grade}`;
+  };
+
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!nickname.trim()) return;
     setSaving(true);
     try {
+      const matched = matchAgeGroup(ageYears);
       await onCreateLearner({
         nickname: nickname.trim(),
         ageYears,
+        ageBand: matched?.id,
+        gradeLevel,
         avatarTone,
       });
       setNickname('');
@@ -119,6 +334,33 @@ export function ParentPanel({
       setSaving(false);
     }
   };
+
+  const handleSaveActiveAgeProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await onUpdateLearnerProfile(activeLearner.id, {
+        ageYears: editAgeYears,
+        gradeLevel: editGradeLevel,
+        ageBand: editAgeBand,
+        applyAgeDefaults,
+      });
+      setProfileSaved(true);
+      setTimeout(() => setProfileSaved(false), 2000);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const weeklySummary = computeLast7Days(
+    activeLearner.id,
+    progressRecords.map((r) => r.updatedAt)
+  );
+  const learnerRewards = loadLearnerRewards(activeLearner.id);
+  const trickyWordList = Object.values(learnerRewards.trickyWords)
+    .filter((w) => w.replays >= 2)
+    .sort((a, b) => b.replays - a.replays)
+    .slice(0, 5);
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -133,10 +375,10 @@ export function ParentPanel({
   return (
     <div className="space-y-8">
       <div className="max-w-3xl space-y-2">
-        <h1 className="text-3xl font-bold text-slate-900">
+        <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-50">
           {messages.parent.heading}
         </h1>
-        <p className="text-base text-slate-600 leading-relaxed">
+        <p className="text-base text-slate-600 dark:text-slate-400 leading-relaxed">
           {messages.parent.subtitle}
         </p>
       </div>
@@ -144,15 +386,15 @@ export function ParentPanel({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         {/* Left column: Learner Profiles & Independent Locale Settings */}
         <div className="lg:col-span-7 space-y-6">
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 space-y-5">
+          <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-5">
             <div className="flex items-center justify-between gap-4">
-              <h2 className="text-lg font-bold text-slate-900">
+              <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
                 {messages.parent.profilesHeading}
               </h2>
               <button
                 type="button"
                 onClick={() => setShowCreateForm((v) => !v)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[40px] rounded-xl border border-slate-200 text-sm font-semibold text-slate-800 hover:bg-slate-50 cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[40px] rounded-xl border border-slate-200 dark:border-slate-700 text-sm font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
               >
                 <Plus className="w-4 h-4" aria-hidden="true" />
                 <span className="whitespace-nowrap">
@@ -171,8 +413,8 @@ export function ParentPanel({
                     onClick={() => onSelectLearner(profile.id)}
                     className={`flex items-center gap-3 p-3.5 rounded-xl border text-left transition-colors cursor-pointer ${
                       isActive
-                        ? 'border-sky-500 bg-sky-50/50'
-                        : 'border-slate-200 bg-white hover:border-slate-300'
+                        ? 'border-accent bg-accent-soft'
+                        : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 hover:border-slate-300 dark:hover:border-slate-700'
                     }`}
                   >
                     <div
@@ -181,18 +423,19 @@ export function ParentPanel({
                       <User className="w-5 h-5" aria-hidden="true" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="font-semibold text-slate-900 truncate">
+                      <p className="font-semibold text-slate-900 dark:text-slate-100 truncate">
                         {profile.nickname}
                       </p>
-                      <p className="text-xs text-slate-500 tabular-nums">
-                        {profile.ageYears}y ·{' '}
+                      <p className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                        {profile.ageYears} {isVi ? 'tuổi' : 'y'} ·{' '}
+                        {getGradeLabel(profile.gradeLevel)} ·{' '}
                         {profile.preferences.learningLocale.toUpperCase()} /{' '}
                         {profile.preferences.explanationLocale.toUpperCase()}
                       </p>
                     </div>
                     {isActive && (
                       <Check
-                        className="w-4 h-4 text-sky-600 shrink-0"
+                        className="w-4 h-4 text-accent shrink-0"
                         aria-hidden="true"
                       />
                     )}
@@ -201,12 +444,119 @@ export function ParentPanel({
               })}
             </div>
 
+            {/* Active Learner K-12 Age & Grade Configuration */}
+            <form
+              onSubmit={handleSaveActiveAgeProfile}
+              className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 p-4 space-y-3"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-slate-100">
+                  <GraduationCap className="w-4 h-4 text-accent" aria-hidden="true" />
+                  <span>
+                    {isVi
+                      ? `Độ tuổi & cấp học của ${activeLearner.nickname} (Mầm non – Lớp 12)`
+                      : `${activeLearner.nickname}'s Age & Grade (Pre-K – Grade 12)`}
+                  </span>
+                </div>
+                {profileSaved && (
+                  <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                    {messages.parent.savedNotice}
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <label className="block space-y-1">
+                  <span className="text-xs font-semibold text-slate-600">
+                    {messages.parent.ageLabel}
+                  </span>
+                  <select
+                    value={editAgeYears}
+                    onChange={(e) => {
+                      const nextAge = Number(e.target.value);
+                      setEditAgeYears(nextAge);
+                      setEditGradeLevel(
+                        nextAge <= 5 ? 0 : Math.min(12, Math.max(1, nextAge - 5))
+                      );
+                      const matched = matchAgeGroup(nextAge);
+                      if (matched) setEditAgeBand(matched.id);
+                    }}
+                    className="w-full min-h-[40px] rounded-xl border border-slate-200 bg-white px-2.5 text-sm text-slate-900"
+                  >
+                    {Array.from({ length: 16 }, (_, idx) => idx + 3).map((age) => (
+                      <option key={age} value={age}>
+                        {age} {isVi ? 'tuổi' : 'yrs'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block space-y-1">
+                  <span className="text-xs font-semibold text-slate-600">
+                    {isVi ? 'Khối lớp' : 'Grade level'}
+                  </span>
+                  <select
+                    value={editGradeLevel}
+                    onChange={(e) => setEditGradeLevel(Number(e.target.value))}
+                    className="w-full min-h-[40px] rounded-xl border border-slate-200 bg-white px-2.5 text-sm text-slate-900"
+                  >
+                    <option value={0}>{isVi ? 'Mầm non' : 'Pre-K'}</option>
+                    {Array.from({ length: 12 }, (_, idx) => idx + 1).map((g) => (
+                      <option key={g} value={g}>
+                        {isVi ? `Lớp ${g}` : `Grade ${g}`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block space-y-1">
+                  <span className="text-xs font-semibold text-slate-600">
+                    {isVi ? 'Nhóm lộ trình' : 'Curriculum band'}
+                  </span>
+                  <select
+                    value={editAgeBand}
+                    onChange={(e) => setEditAgeBand(e.target.value)}
+                    className="w-full min-h-[40px] rounded-xl border border-slate-200 bg-white px-2.5 text-sm text-slate-900"
+                  >
+                    {ageGroups.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {isVi ? g.shortLabels.vi : g.shortLabels.en}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                <label className="inline-flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={applyAgeDefaults}
+                    onChange={(e) => setApplyAgeDefaults(e.target.checked)}
+                    className="w-4 h-4 accent-sky-600"
+                  />
+                  <span>
+                    {isVi
+                      ? 'Áp dụng gợi ý thời lượng & tốc độ đọc theo nhóm tuổi'
+                      : 'Apply recommended duration & speed for this age group'}
+                  </span>
+                </label>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="px-3.5 py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
+                >
+                  {isVi ? 'Cập nhật hồ sơ' : 'Save profile'}
+                </button>
+              </div>
+            </form>
+
             {showCreateForm && (
               <form
                 onSubmit={handleCreateSubmit}
                 className="pt-4 border-t border-slate-100 space-y-4"
               >
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <label className="block space-y-1.5">
                     <span className="text-xs font-semibold text-slate-700">
                       {messages.parent.nicknameLabel}
@@ -217,7 +567,7 @@ export function ParentPanel({
                       maxLength={32}
                       value={nickname}
                       onChange={(e) => setNickname(e.target.value)}
-                      placeholder="Bé Bông"
+                      placeholder="Bé Bông / Minh Anh"
                       className="w-full min-h-[44px] rounded-xl border border-slate-200 px-3 text-sm text-slate-900 focus:outline-none focus:border-sky-500"
                     />
                   </label>
@@ -227,15 +577,53 @@ export function ParentPanel({
                     </span>
                     <select
                       value={ageYears}
-                      onChange={(e) => setAgeYears(Number(e.target.value))}
+                      onChange={(e) => {
+                        const nextAge = Number(e.target.value);
+                        setAgeYears(nextAge);
+                        setGradeLevel(
+                          nextAge <= 5 ? 0 : Math.min(12, Math.max(1, nextAge - 5))
+                        );
+                      }}
                       className="w-full min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900"
                     >
-                      <option value={3}>3</option>
-                      <option value={4}>4</option>
-                      <option value={5}>5</option>
+                      {Array.from({ length: 16 }, (_, idx) => idx + 3).map((age) => (
+                        <option key={age} value={age}>
+                          {age} {isVi ? 'tuổi' : 'yrs'}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block space-y-1.5">
+                    <span className="text-xs font-semibold text-slate-700">
+                      {isVi ? 'Khối lớp' : 'Grade level'}
+                    </span>
+                    <select
+                      value={gradeLevel}
+                      onChange={(e) => setGradeLevel(Number(e.target.value))}
+                      className="w-full min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900"
+                    >
+                      <option value={0}>{isVi ? 'Mầm non' : 'Pre-K'}</option>
+                      {Array.from({ length: 12 }, (_, idx) => idx + 1).map((g) => (
+                        <option key={g} value={g}>
+                          {isVi ? `Lớp ${g}` : `Grade ${g}`}
+                        </option>
+                      ))}
                     </select>
                   </label>
                 </div>
+
+                {matchAgeGroup(ageYears) && (
+                  <p className="text-xs text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">
+                    {isVi ? 'Lộ trình phù hợp:' : 'Matched curriculum band:'}{' '}
+                    <strong>
+                      {isVi
+                        ? matchAgeGroup(ageYears)?.displayNames.vi
+                        : matchAgeGroup(ageYears)?.displayNames.en}
+                    </strong>{' '}
+                    · {matchAgeGroup(ageYears)?.uiProfile.defaultDailyMinutes}{' '}
+                    {messages.parent.minutesUnit}
+                  </p>
+                )}
 
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex items-center gap-2">
@@ -276,18 +664,18 @@ export function ParentPanel({
             )}
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 space-y-5">
+          <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-5">
             <div className="flex items-center justify-between gap-4">
               <div className="space-y-1">
-                <h2 className="text-lg font-bold text-slate-900">
+                <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
                   {messages.parent.languageHeading}
                 </h2>
-                <p className="text-sm text-slate-600">
+                <p className="text-sm text-slate-600 dark:text-slate-400">
                   {messages.parent.languageNote}
                 </p>
               </div>
               {savedNotice && (
-                <span className="text-xs font-semibold text-emerald-700 whitespace-nowrap">
+                <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 whitespace-nowrap">
                   {messages.parent.savedNotice}
                 </span>
               )}
@@ -295,7 +683,7 @@ export function ParentPanel({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <label className="block space-y-1.5">
-                <span className="text-xs font-semibold text-slate-700">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
                   {messages.parent.interfaceLocale}
                 </span>
                 <select
@@ -303,7 +691,7 @@ export function ParentPanel({
                   onChange={(e) =>
                     void handlePrefChange({ interfaceLocale: e.target.value })
                   }
-                  className="w-full min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 text-sm text-slate-900 dark:text-slate-100"
                 >
                   {uiLocales.map((l) => (
                     <option key={l.locale} value={l.locale}>
@@ -314,7 +702,7 @@ export function ParentPanel({
               </label>
 
               <label className="block space-y-1.5">
-                <span className="text-xs font-semibold text-slate-700">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
                   {messages.parent.learningLocale}
                 </span>
                 <select
@@ -322,7 +710,7 @@ export function ParentPanel({
                   onChange={(e) =>
                     void handlePrefChange({ learningLocale: e.target.value })
                   }
-                  className="w-full min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 text-sm text-slate-900 dark:text-slate-100"
                 >
                   {learningLocales.map((l) => (
                     <option key={l.locale} value={l.locale}>
@@ -333,7 +721,7 @@ export function ParentPanel({
               </label>
 
               <label className="block space-y-1.5">
-                <span className="text-xs font-semibold text-slate-700">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
                   {messages.parent.explanationLocale}
                 </span>
                 <select
@@ -341,7 +729,7 @@ export function ParentPanel({
                   onChange={(e) =>
                     void handlePrefChange({ explanationLocale: e.target.value })
                   }
-                  className="w-full min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 text-sm text-slate-900 dark:text-slate-100"
                 >
                   {explanationLocales.map((l) => (
                     <option key={l.locale} value={l.locale}>
@@ -352,7 +740,7 @@ export function ParentPanel({
               </label>
 
               <label className="block space-y-1.5">
-                <span className="text-xs font-semibold text-slate-700">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
                   {messages.parent.narrationLocale}
                 </span>
                 <select
@@ -360,7 +748,7 @@ export function ParentPanel({
                   onChange={(e) =>
                     void handlePrefChange({ narrationLocale: e.target.value })
                   }
-                  className="w-full min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 text-sm text-slate-900 dark:text-slate-100"
                 >
                   {narrationLocales.map((l) => (
                     <option key={l.locale} value={l.locale}>
@@ -371,12 +759,12 @@ export function ParentPanel({
               </label>
             </div>
 
-            <div className="pt-4 border-t border-slate-100 space-y-4">
-              <h3 className="text-sm font-bold text-slate-900">
+            <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-4">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
                 {messages.parent.accessibilityHeading}
               </h3>
 
-              <label className="flex items-center justify-between text-sm text-slate-700 cursor-pointer">
+              <label className="flex items-center justify-between text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
                 <span>{messages.parent.reducedMotion}</span>
                 <input
                   type="checkbox"
@@ -388,8 +776,32 @@ export function ParentPanel({
                 />
               </label>
 
+              <label className="flex items-center justify-between gap-4 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
+                <div>
+                  <span className="font-medium text-slate-800 dark:text-slate-100 block">
+                    {isVi
+                      ? 'Cổng xác nhận phụ huynh (Parental Gate)'
+                      : 'Parental Gate lock'}
+                  </span>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">
+                    {isVi
+                      ? 'Yêu cầu phép tính nhỏ hoặc giữ 2 giây khi mở trang Phụ huynh để bé không bấm nhầm.'
+                      : 'Requires a quick math check or 2-second hold before opening Parents settings.'}
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={gateEnabled}
+                  onChange={(e) => {
+                    setGateEnabled(e.target.checked);
+                    setParentalGateEnabled(e.target.checked);
+                  }}
+                  className="w-4 h-4 accent-sky-600 shrink-0"
+                />
+              </label>
+
               <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-sm text-slate-700 tabular-nums">
+                <div className="flex items-center justify-between text-sm text-slate-700 dark:text-slate-300 tabular-nums">
                   <span>{messages.parent.dailyLimit}</span>
                   <span className="font-semibold">
                     {activeLearner.preferences.dailyMinutesLimit}{' '}
@@ -399,7 +811,7 @@ export function ParentPanel({
                 <input
                   type="range"
                   min={5}
-                  max={30}
+                  max={60}
                   step={5}
                   value={activeLearner.preferences.dailyMinutesLimit}
                   onChange={(e) =>
@@ -416,20 +828,20 @@ export function ParentPanel({
 
         {/* Right column: Parent Account, Learner Progress & System Admin Link */}
         <div className="lg:col-span-5 space-y-6">
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 space-y-4">
-            <h2 className="text-lg font-bold text-slate-900">
+          <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-4">
+            <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
               {messages.parent.accountHeading}
             </h2>
             {authUser ? (
               <div className="space-y-3">
-                <div className="text-sm text-slate-700">
-                  <p className="font-semibold text-slate-900">
+                <div className="text-sm text-slate-700 dark:text-slate-300">
+                  <p className="font-semibold text-slate-900 dark:text-slate-100">
                     {authUser.displayName ?? authUser.email ?? 'Parent'}
                   </p>
                   {authUser.email && (
-                    <p className="text-xs text-slate-500">
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
                       {authUser.email} ·{' '}
-                      <span className="font-medium text-slate-700">
+                      <span className="font-medium text-slate-700 dark:text-slate-200">
                         {authUser.role === 'admin'
                           ? messages.parent.roleAdmin
                           : authUser.role === 'teacher'
@@ -438,7 +850,7 @@ export function ParentPanel({
                       </span>
                     </p>
                   )}
-                  <p className="mt-1.5 text-xs font-medium text-emerald-700">
+                  <p className="mt-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">
                     {messages.parent.accountSignedInNote}
                   </p>
                 </div>
@@ -446,7 +858,7 @@ export function ParentPanel({
                   type="button"
                   disabled={authBusy}
                   onClick={() => void onSignOut()}
-                  className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[42px] rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+                  className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[42px] rounded-xl border border-slate-200 dark:border-slate-700 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
                 >
                   <LogOut className="w-4 h-4" aria-hidden="true" />
                   <span className="whitespace-nowrap">
@@ -466,28 +878,10 @@ export function ParentPanel({
                   onClick={() => void onSignInGoogle()}
                   className="w-full inline-flex items-center justify-center gap-2.5 px-4 py-2.5 min-h-[44px] rounded-xl border border-slate-300 bg-white text-slate-900 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50 transition-colors cursor-pointer"
                 >
-                  <svg
-                    className="w-4 h-4 shrink-0"
-                    viewBox="0 0 24 24"
+                  <Globe
+                    className="w-4 h-4 text-sky-600 shrink-0"
                     aria-hidden="true"
-                  >
-                    <path
-                      fill="#4285F4"
-                      d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47a5.53 5.53 0 0 1-2.4 3.63v3h3.88c2.27-2.09 3.54-5.17 3.54-8.87Z"
-                    />
-                    <path
-                      fill="#34A853"
-                      d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.09A12 12 0 0 0 12 24Z"
-                    />
-                    <path
-                      fill="#FBBC05"
-                      d="M5.28 14.29A7.18 7.18 0 0 1 4.9 12c0-.79.14-1.56.38-2.29V6.62H1.29A12 12 0 0 0 0 12c0 1.94.46 3.77 1.29 5.38l3.99-3.09Z"
-                    />
-                    <path
-                      fill="#EA4335"
-                      d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0A12 12 0 0 0 1.29 6.62l3.99 3.09c.95-2.85 3.6-4.96 6.72-4.96Z"
-                    />
-                  </svg>
+                  />
                   <span className="whitespace-nowrap">
                     {messages.parent.signInGoogle}
                   </span>
@@ -603,33 +997,132 @@ export function ParentPanel({
             )}
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 space-y-4">
-            <h2 className="text-lg font-bold text-slate-900">
+          {/* Weekly 7-Day Activity Calendar, Streak & Review Suggestions */}
+          <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-6 space-y-4 sm:space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Calendar
+                  className="w-4 h-4 text-accent shrink-0"
+                  aria-hidden="true"
+                />
+                <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100 leading-tight whitespace-nowrap">
+                  {isVi ? 'Nhật ký học 7 ngày qua' : '7-Day Learning Rhythm'}
+                </h2>
+              </div>
+              <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 dark:text-amber-400 tabular-nums whitespace-nowrap shrink-0">
+                <Flame
+                  className="w-4 h-4 text-amber-500 shrink-0"
+                  aria-hidden="true"
+                />
+                <span>
+                  {weeklySummary.streakDays}{' '}
+                  {isVi ? 'ngày liên tiếp' : 'day streak'}
+                </span>
+              </span>
+            </div>
+
+            <div className="grid grid-cols-7 gap-1 sm:gap-2">
+              {weeklySummary.days.map((day) => (
+                <div
+                  key={day.dateKey}
+                  title={`${day.dateKey}: ${day.lessons} lessons, ${day.stories} stories`}
+                  className={`flex flex-col items-center justify-center rounded-xl border px-0 py-2 sm:px-1.5 sm:py-2.5 min-w-0 gap-1.5 ${
+                    day.active
+                      ? 'border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-900 dark:text-emerald-200'
+                      : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-400 dark:text-slate-500'
+                  }`}
+                >
+                  <span className="text-[10px] sm:text-[11px] font-semibold leading-none text-center">
+                    {day.shortDay}
+                  </span>
+                  <div
+                    className={`w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center shrink-0 ${
+                      day.active
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-200/70 dark:bg-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {day.active ? (
+                      <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                    ) : (
+                      <span className="text-[10px] leading-none">·</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed tabular-nums">
+              {isVi
+                ? `Tuần này ${activeLearner.nickname} đã hoạt động ${weeklySummary.activeDaysCount}/7 ngày và luyện khoảng ${weeklySummary.totalWords7d} lượt từ vựng.`
+                : `Active ${weeklySummary.activeDaysCount}/7 days this week with ~${weeklySummary.totalWords7d} vocabulary practices.`}
+            </p>
+
+            {trickyWordList.length > 0 && (
+              <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-2">
+                <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                  {isVi
+                    ? 'Gợi ý từ con bấm nghe nhiều lần (nên ôn lại cùng bé):'
+                    : 'Suggested words to review together (replayed often):'}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {trickyWordList.map((w) => (
+                    <button
+                      key={w.term}
+                      type="button"
+                      onClick={() =>
+                        speakText({
+                          text: w.term,
+                          locale: activeLearner.preferences.learningLocale,
+                          rate: 0.85,
+                        })
+                      }
+                      className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[38px] max-w-full rounded-xl border border-accent bg-accent-soft text-xs font-semibold text-left cursor-pointer"
+                    >
+                      <Volume2
+                        className="w-3.5 h-3.5 text-accent shrink-0"
+                        aria-hidden="true"
+                      />
+                      <span className="truncate">{w.term}</span>
+                      <span className="text-[10px] opacity-80 tabular-nums shrink-0">
+                        ×{w.replays}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+
+          <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-4">
+            <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
               {messages.parent.progressHeading}
             </h2>
             {progressRecords.length === 0 ? (
-              <p className="text-sm text-slate-500">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
                 {messages.parent.noProgressYet}
               </p>
             ) : (
-              <div className="divide-y divide-slate-100">
+              <div className="divide-y divide-slate-100 dark:divide-slate-800">
                 {progressRecords.map((rec) => (
                   <div
                     key={`${rec.lessonId}-${rec.learningLocale}-${rec.mode}`}
                     className="py-3 flex items-center justify-between gap-3"
                   >
                     <div>
-                      <p className="text-sm font-semibold text-slate-900">
-                        Fruits · {rec.mode}
+                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        {rec.lessonId} · {rec.mode}
                       </p>
-                      <p className="text-xs text-slate-500 tabular-nums">
-                        Locale: {rec.learningLocale.toUpperCase()} ·{' '}
+                      <p className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                        {rec.learningLocale.toUpperCase()} ·{' '}
                         {rec.completedActivityIds.length}/{rec.totalActivities}
                       </p>
                     </div>
                     <span
                       className={`text-xs font-semibold ${
-                        rec.completed ? 'text-emerald-700' : 'text-sky-700'
+                        rec.completed
+                          ? 'text-emerald-700 dark:text-emerald-400'
+                          : 'text-accent'
                       }`}
                     >
                       {rec.completed
@@ -642,29 +1135,201 @@ export function ParentPanel({
             )}
           </section>
 
-          {authUser &&
-            (authUser.role === 'admin' || authUser.role === 'teacher') && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-6 space-y-3">
-              <div className="flex items-center gap-2 text-slate-900">
-                <ShieldCheck
-                  className="w-5 h-5 text-sky-600 shrink-0"
-                  aria-hidden="true"
-                />
-                <h2 className="text-base font-bold">
-                  {messages.parent.openAdminTitle}
-                </h2>
+          {authUser && (
+            <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-5">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-slate-900 dark:text-slate-100">
+                  <Lock
+                    className="w-4 h-4 text-accent shrink-0"
+                    aria-hidden="true"
+                  />
+                  <h2 className="text-lg font-bold">
+                    {isVi
+                      ? 'Quyền riêng tư & Dữ liệu của gia đình'
+                      : 'Family Privacy & Data Control'}
+                  </h2>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  {isVi
+                    ? 'Quản lý sự đồng thuận lưu trữ hồ sơ, tải bản sao dữ liệu gia đình, hoặc lưu trữ/xóa vĩnh viễn dữ liệu học tập.'
+                    : 'Manage parental consents, download a copy of your family data, or archive/permanently delete learner records.'}
+                </p>
               </div>
-              <p className="text-sm text-slate-600 leading-relaxed">
-                {messages.parent.openAdminDesc}
-              </p>
-              <button
-                type="button"
-                onClick={onOpenAdmin}
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 min-h-[42px] rounded-xl border border-slate-200 bg-slate-50 text-sm font-semibold text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
-              >
-                <span>{messages.parent.openAdminButton}</span>
-                <ChevronRight className="w-4 h-4" aria-hidden="true" />
-              </button>
+
+              {privacy && (
+                <div className="grid grid-cols-3 gap-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-100 dark:border-slate-800 p-3 text-center">
+                  <div>
+                    <p className="text-base font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                      {privacy.learnerCount}
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      {isVi ? 'Hồ sơ bé' : 'Profiles'}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-base font-bold text-slate-900 tabular-nums">
+                      {privacy.progressCount}
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      {isVi ? 'Tiến độ' : 'Progress'}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-base font-bold text-slate-900 tabular-nums">
+                      {privacy.storyPositionCount}
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      {isVi ? 'Dấu truyện' : 'Bookmarks'}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-2.5 pt-1 border-t border-slate-100">
+                {(
+                  [
+                    [
+                      'child_profile_storage',
+                      isVi
+                        ? 'Lưu trữ hồ sơ biệt danh & tuổi của bé'
+                        : 'Store child nickname & age profiles',
+                    ],
+                    [
+                      'learning_progress_sync',
+                      isVi
+                        ? 'Đồng bộ tiến độ học & dấu trang truyện'
+                        : 'Sync lesson progress & story bookmarks',
+                    ],
+                    [
+                      'web_push_reminders',
+                      isVi
+                        ? 'Nhận thông báo nhắc học nhẹ nhàng cho phụ huynh'
+                        : 'Receive gentle parent reminder notifications',
+                    ],
+                  ] as Array<[ParentConsentPurpose, string]>
+                ).map(([purpose, label]) => (
+                  <label
+                    key={purpose}
+                    className="flex items-center justify-between gap-3 text-xs font-medium text-slate-700 cursor-pointer"
+                  >
+                    <span>{label}</span>
+                    <input
+                      type="checkbox"
+                      disabled={privacyBusy}
+                      checked={getConsentState(purpose)}
+                      onChange={(e) =>
+                        void handleToggleConsent(purpose, e.target.checked)
+                      }
+                      className="w-4 h-4 accent-sky-600 shrink-0"
+                    />
+                  </label>
+                ))}
+              </div>
+
+              {privacyNotice && (
+                <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                  {privacyNotice}
+                </p>
+              )}
+              {privacyError && (
+                <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  {privacyError}
+                </p>
+              )}
+
+              <div className="pt-2 border-t border-slate-100 space-y-2.5">
+                <button
+                  type="button"
+                  disabled={privacyBusy}
+                  onClick={() => void handleExportFamilyData()}
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 min-h-[42px] rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+                >
+                  <Download className="w-4 h-4 text-sky-600" aria-hidden="true" />
+                  <span>
+                    {isVi
+                      ? 'Tải bản sao dữ liệu gia đình'
+                      : 'Download Family Data'}
+                  </span>
+                </button>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {!confirmSoftArchive ? (
+                    <button
+                      type="button"
+                      disabled={privacyBusy}
+                      onClick={() => setConfirmSoftArchive(true)}
+                      className="inline-flex items-center justify-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                    >
+                      <Archive className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>
+                        {isVi ? 'Lưu trữ hồ sơ' : 'Archive Data'}
+                      </span>
+                    </button>
+                  ) : (
+                    <div className="flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-1.5">
+                      <button
+                        type="button"
+                        disabled={privacyBusy}
+                        onClick={() => void handleSoftArchiveFamily()}
+                        className="flex-1 px-2 py-1 rounded-lg bg-amber-600 text-white text-[11px] font-semibold cursor-pointer"
+                      >
+                        {isVi ? 'Xác nhận lưu trữ' : 'Confirm Archive'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmSoftArchive(false)}
+                        className="px-2 py-1 text-[11px] font-semibold text-slate-600 cursor-pointer"
+                      >
+                        {isVi ? 'Hủy' : 'Cancel'}
+                      </button>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={privacyBusy}
+                    onClick={() => setShowHardDeleteBox((v) => !v)}
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-rose-200 text-xs font-semibold text-rose-700 hover:bg-rose-50 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>
+                      {isVi ? 'Xóa vĩnh viễn' : 'Delete Forever'}
+                    </span>
+                  </button>
+                </div>
+
+                {showHardDeleteBox && (
+                  <form
+                    onSubmit={handleHardDeleteFamily}
+                    className="rounded-xl border border-rose-200 bg-rose-50/70 p-3 space-y-2.5"
+                  >
+                    <p className="text-xs text-rose-900 leading-relaxed">
+                      {isVi
+                        ? 'Thao tác này sẽ xóa vĩnh viễn toàn bộ hồ sơ bé, tiến độ học và dấu trang truyện. Nhập DELETE để xác nhận:'
+                        : 'This permanently deletes all child profiles, progress, and bookmarks. Type DELETE to confirm:'}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={hardDeletePhrase}
+                        onChange={(e) => setHardDeletePhrase(e.target.value)}
+                        placeholder="DELETE"
+                        className="flex-1 min-h-[36px] rounded-lg border border-rose-200 bg-white px-2.5 text-xs font-mono uppercase"
+                      />
+                      <button
+                        type="submit"
+                        disabled={
+                          privacyBusy ||
+                          hardDeletePhrase.trim().toUpperCase() !== 'DELETE'
+                        }
+                        className="px-3 py-2 rounded-lg bg-rose-600 text-white text-xs font-semibold hover:bg-rose-700 disabled:opacity-40 cursor-pointer"
+                      >
+                        {isVi ? 'Xóa ngay' : 'Purge'}
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
             </section>
           )}
         </div>

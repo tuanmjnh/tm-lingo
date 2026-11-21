@@ -1,6 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
-  <rect width="512" height="512" rx="112" fill="#0284C7"/>
-  <circle cx="256" cy="256" r="176" fill="#0EA5E9" fill-opacity="0.28"/>
-  <path d="M150 184h212v38h-84v150h-44V222h-84v-38z" fill="#FFFFFF"/>
-  <circle cx="348" cy="336" r="34" fill="#FDE047"/>
+  <defs>
+    <linearGradient id="tmlingo-bg" x1="36" y1="24" x2="476" y2="488" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#0EA5E9"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#tmlingo-bg)"/>
+  <!-- Open storybook forming a speech bubble -->
+  <path d="M126 154c46 0 92 14 122 36v150c-30-20-74-30-122-30-12 0-22-10-22-22V176c0-12 10-22 22-22z" fill="#FFFFFF"/>
+  <path d="M386 154c-46 0-92 14-122 36v150c30-20 74-30 122-30 12 0 22-10 22-22V176c0-12-10-22-22-22z" fill="#FFFFFF"/>
+  <!-- Book spine & speech bubble tail -->
+  <path d="M104 328c46 0 100 10 144 36v16c-46-22-96-30-144-30-12 0-22-10-22-22v-146c0-10 8-18 18-18h4v164z" fill="#E0F2FE"/>
+  <path d="M408 328c-46 0-100 10-144 36v16c26-12 52-20 78-25l52 43-12-49c9-1 18-1 26-1 12 0 22-10 22-22v-146c0-10-8-18-18-18h-4v166z" fill="#FFFFFF"/>
+  <!-- Golden spark star at center -->
+  <path d="M256 206l13 37 37 13-37 13-13 37-13-37-37-13 37-13 13-37z" fill="#FBBF24"/>
 </svg>

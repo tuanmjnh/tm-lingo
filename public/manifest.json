@@ -2,10 +2,11 @@
   "id": "/",
   "name": "TM-Lingo",
   "short_name": "TM-Lingo",
-  "description": "Multilingual early language-learning platform for children aged 3-5.",
+  "description": "Nền tảng học đa ngôn ngữ và đọc truyện tương tác theo lộ trình từng lứa tuổi từ Mầm non đến Lớp 12 dành cho gia đình.",
   "theme_color": "#0284C7",
   "background_color": "#F8FAFC",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "start_url": "/",
   "scope": "/",
   "icons": [

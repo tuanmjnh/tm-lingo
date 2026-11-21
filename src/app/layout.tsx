@@ -4,16 +4,21 @@ import '../index.css';
 export const metadata: Metadata = {
   title: 'TM-Lingo',
   description:
-    'Multilingual language-learning platform for children aged 3-5 with decoupled learning content, hybrid experience modes, multilingual story reader, and parent controls.',
+    'Nền tảng học đa ngôn ngữ và đọc truyện tương tác theo lộ trình từng lứa tuổi từ Mầm non đến Lớp 12 dành cho gia đình.',
   manifest: '/manifest.json',
   icons: {
-    icon: '/icon.svg',
-    apple: '/apple-touch-icon.png',
+    icon: [
+      { url: '/icon.svg', type: 'image/svg+xml' },
+      { url: '/favicon-32x32.png', sizes: '32x32', type: 'image/png' },
+      { url: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' },
+    ],
+    shortcut: '/favicon-32x32.png',
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
   },
   openGraph: {
     title: 'TM-Lingo',
     description:
-      'Multilingual language-learning platform for children aged 3-5 with decoupled learning content, hybrid experience modes, multilingual story reader, and parent controls.',
+      'Nền tảng học đa ngôn ngữ và đọc truyện tương tác theo lộ trình từng lứa tuổi từ Mầm non đến Lớp 12 dành cho gia đình.',
   },
   appleWebApp: {
     capable: true,
@@ -34,7 +39,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="vi">
+    <html lang="vi" suppressHydrationWarning>
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link
@@ -47,7 +52,7 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body className="bg-[#F8FAFC] text-[#0F172A] antialiased">
+      <body className="bg-[#F8FAFC] text-[#0F172A] dark:bg-[#0B1120] dark:text-[#F1F5F9] antialiased">
         {children}
       </body>
     </html>

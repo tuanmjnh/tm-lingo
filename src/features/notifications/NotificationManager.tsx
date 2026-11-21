@@ -10,6 +10,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import type {
+  DeleteMode,
   NotificationCampaign,
   NotificationCategory,
   NotificationDeliveryLog,
@@ -25,9 +26,11 @@ import {
 } from '../../shared/pushClient';
 import { PWAInstallButton } from '../../components/PWAInstallButton';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
+import { DeleteActionsControl } from '../admin/DeleteActionsControl';
 
 interface NotificationManagerProps {
   interfaceLocale: string;
+  canHardDelete?: boolean;
   embedded?: boolean;
 }
 
@@ -40,6 +43,7 @@ const ALL_CATEGORIES: NotificationCategory[] = [
 
 export function NotificationManager({
   interfaceLocale,
+  canHardDelete = false,
   embedded = false,
 }: NotificationManagerProps) {
   const isVi = interfaceLocale === 'vi';
@@ -50,9 +54,9 @@ export function NotificationManager({
   const [subscriptions, setSubscriptions] = useState<PushSubscriptionSummary[]>(
     []
   );
-  const [statusFilter, setStatusFilter] = useState<'all' | NotificationStatus>(
-    'all'
-  );
+  const [statusFilter, setStatusFilter] = useState<
+    'all' | NotificationStatus | 'archived'
+  >('all');
   const [pushSupport, setPushSupport] = useState<PushSupportState>({
     supported: false,
     permission: 'unsupported',
@@ -107,7 +111,7 @@ export function NotificationManager({
   const loadData = useCallback(async () => {
     try {
       const [cmpRes, subRes, support] = await Promise.all([
-        apiClient.getNotificationCampaigns(),
+        apiClient.getNotificationCampaigns({ includeArchived: true }),
         apiClient.getPushSubscriptions(),
         getPushSupportState(),
       ]);
@@ -189,16 +193,40 @@ export function NotificationManager({
     setScheduledFor(cmp.scheduledFor ?? '19:30');
   };
 
-  const handleDeleteCampaign = async (campaignId: string) => {
+  const handleDeleteCampaign = async (campaignId: string, mode: DeleteMode) => {
     setBusy(true);
     setError(null);
     try {
-      await apiClient.deleteNotificationCampaign(campaignId);
+      await apiClient.deleteNotificationCampaign(campaignId, mode);
       if (editingId === campaignId) resetComposer();
       await loadData();
-      showTempNotice(isVi ? 'Đã xóa thông báo.' : 'Campaign deleted.');
+      showTempNotice(
+        mode === 'hard'
+          ? isVi
+            ? 'Đã xóa vĩnh viễn chiến dịch thông báo.'
+            : 'Permanently deleted campaign.'
+          : isVi
+            ? 'Đã lưu trữ chiến dịch thông báo (có thể khôi phục).'
+            : 'Archived notification campaign (restorable).'
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRestoreCampaign = async (campaignId: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await apiClient.restoreNotificationCampaign(campaignId);
+      await loadData();
+      showTempNotice(
+        isVi ? 'Đã khôi phục chiến dịch thông báo.' : 'Restored campaign.'
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Restore failed');
     } finally {
       setBusy(false);
     }
@@ -213,18 +241,18 @@ export function NotificationManager({
       if (result.log.mode === 'no-subscribers') {
         showTempNotice(
           isVi
-            ? 'Đã ghi nhận lịch sử gửi (chưa có thiết bị đăng ký push — hãy bật Push ở cột bên phải).'
-            : 'Logged send event (no subscribed devices yet — enable Push on the right).'
+            ? 'Đã ghi nhận lịch sử gửi (chưa có thiết bị đăng ký — hãy bật thông báo ở cột bên phải).'
+            : 'Logged send event (no subscribed devices yet — enable notifications on the right).'
         );
       } else {
         showTempNotice(
           isVi
-            ? `Đã gửi Push tới ${result.log.sentCount} thiết bị.`
-            : `Sent Web Push to ${result.log.sentCount} device(s).`
+            ? `Đã gửi thông báo tới ${result.log.sentCount} thiết bị.`
+            : `Sent notification to ${result.log.sentCount} device(s).`
         );
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send push');
+      setError(err instanceof Error ? err.message : 'Failed to send notification');
     } finally {
       setBusy(false);
     }
@@ -267,14 +295,14 @@ export function NotificationManager({
       await loadData();
       showTempNotice(
         isVi
-          ? 'Đã đăng ký nhận Push Notification cho thiết bị này.'
-          : 'This device is now subscribed to Web Push notifications.'
+          ? 'Đã đăng ký nhận thông báo học tập cho thiết bị này.'
+          : 'This device is now subscribed to study notifications.'
       );
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : 'Unable to subscribe this browser to Push.'
+          : 'Unable to subscribe this browser to notifications.'
       );
     } finally {
       setBusy(false);
@@ -302,10 +330,13 @@ export function NotificationManager({
     );
   };
 
+  const archivedCount = campaigns.filter((c) => Boolean(c.archivedAt)).length;
   const filteredCampaigns =
-    statusFilter === 'all'
-      ? campaigns
-      : campaigns.filter((c) => c.status === statusFilter);
+    statusFilter === 'archived'
+      ? campaigns.filter((c) => Boolean(c.archivedAt))
+      : statusFilter === 'all'
+        ? campaigns.filter((c) => !c.archivedAt)
+        : campaigns.filter((c) => !c.archivedAt && c.status === statusFilter);
 
   return (
     <div className="space-y-8">
@@ -313,13 +344,13 @@ export function NotificationManager({
         <div className="max-w-3xl space-y-2">
           <h1 className="text-3xl font-bold text-slate-900">
             {isVi
-              ? 'Quản trị thông báo & PWA Push'
-              : 'Notification management & PWA Push'}
+              ? 'Quản trị thông báo nhắc học'
+              : 'Notification Management'}
           </h1>
           <p className="text-base text-slate-600 leading-relaxed">
             {isVi
-              ? 'Soạn thảo, lên lịch và gửi thông báo nhẹ nhàng cho phụ huynh (không gây áp lực điểm số cho trẻ), đồng thời quản lý cài đặt PWA và thiết bị nhận Web Push.'
-              : 'Compose, schedule, and dispatch gentle parent notifications without pressuring children, while managing PWA installation and Web Push devices.'}
+              ? 'Soạn thảo, lên lịch và gửi thông báo nhẹ nhàng cho phụ huynh (không gây áp lực điểm số cho trẻ), đồng thời quản lý thiết bị nhận thông báo.'
+              : 'Compose, schedule, and dispatch gentle parent notifications without pressuring children, and manage subscribed devices.'}
           </p>
         </div>
       )}
@@ -519,13 +550,15 @@ export function NotificationManager({
               <h2 className="text-lg font-bold text-slate-900">
                 {isVi ? 'Danh sách chiến dịch thông báo' : 'Notification campaigns'}
               </h2>
-              <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl">
-                {(['all', 'draft', 'scheduled', 'sent'] as const).map((key) => (
+              <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-xl">
+                {(
+                  ['all', 'draft', 'scheduled', 'sent', 'archived'] as const
+                ).map((key) => (
                   <button
                     key={key}
                     type="button"
                     onClick={() => setStatusFilter(key)}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap tabular-nums cursor-pointer ${
                       statusFilter === key
                         ? 'bg-white text-slate-900 shadow-sm'
                         : 'text-slate-600 hover:text-slate-900'
@@ -535,7 +568,9 @@ export function NotificationManager({
                       ? isVi
                         ? 'Tất cả'
                         : 'All'
-                      : statusLabels[key]}
+                      : key === 'archived'
+                        ? `${isVi ? 'Lưu trữ' : 'Archived'} (${archivedCount})`
+                        : statusLabels[key]}
                   </button>
                 ))}
               </div>
@@ -549,71 +584,87 @@ export function NotificationManager({
               </p>
             ) : (
               <div className="divide-y divide-slate-100">
-                {filteredCampaigns.map((cmp) => (
-                  <article key={cmp.id} className="py-4 first:pt-0 last:pb-0 space-y-2.5">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="space-y-1 min-w-0">
-                        <p className="text-xs text-slate-500 tabular-nums">
-                          {categoryLabels[cmp.category]} · {cmp.locale.toUpperCase()} ·{' '}
-                          {statusLabels[cmp.status]}
-                          {cmp.scheduledFor ? ` · ${cmp.scheduledFor}` : ''}
-                        </p>
-                        <h3 className="text-base font-bold text-slate-900">
-                          {cmp.title}
-                        </h3>
-                        <p className="text-sm text-slate-600 leading-relaxed">
-                          {cmp.body}
-                        </p>
+                {filteredCampaigns.map((cmp) => {
+                  const isArchived = Boolean(cmp.archivedAt);
+                  return (
+                    <article
+                      key={cmp.id}
+                      className="py-4 first:pt-0 last:pb-0 space-y-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="space-y-1 min-w-0">
+                          <p className="text-xs text-slate-500 tabular-nums">
+                            {categoryLabels[cmp.category]} ·{' '}
+                            {cmp.locale.toUpperCase()} ·{' '}
+                            {isArchived
+                              ? isVi
+                                ? 'Đã lưu trữ'
+                                : 'Archived'
+                              : statusLabels[cmp.status]}
+                            {cmp.scheduledFor ? ` · ${cmp.scheduledFor}` : ''}
+                          </p>
+                          <h3 className="text-base font-bold text-slate-900">
+                            {cmp.title}
+                          </h3>
+                          <p className="text-sm text-slate-600 leading-relaxed">
+                            {cmp.body}
+                          </p>
+                        </div>
                       </div>
-                    </div>
 
-                    <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                      <span className="text-xs text-slate-500 tabular-nums">
-                        {isVi ? 'Đã gửi' : 'Sent'}: {cmp.sentCount}
-                        {cmp.lastSentAt
-                          ? ` · ${new Date(cmp.lastSentAt).toLocaleTimeString()}`
-                          : ''}
-                      </span>
+                      <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                        <span className="text-xs text-slate-500 tabular-nums">
+                          {isVi ? 'Đã gửi' : 'Sent'}: {cmp.sentCount}
+                          {cmp.lastSentAt
+                            ? ` · ${new Date(cmp.lastSentAt).toLocaleTimeString()}`
+                            : ''}
+                        </span>
 
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => void handleLocalPreview(cmp)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap cursor-pointer"
-                        >
-                          <Bell className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span>{isVi ? 'Thử hiển thị' : 'Preview'}</span>
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void handleSendCampaign(cmp)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap cursor-pointer"
-                        >
-                          <Send className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span>{isVi ? 'Gửi Push' : 'Send Push'}</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleEditCampaign(cmp)}
-                          className="p-2 min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 cursor-pointer"
-                          aria-label="Edit campaign"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void handleDeleteCampaign(cmp.id)}
-                          className="p-2 min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 text-slate-600 hover:text-rose-700 hover:border-rose-200 cursor-pointer"
-                          aria-label="Delete campaign"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {!isArchived && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => void handleLocalPreview(cmp)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap cursor-pointer"
+                              >
+                                <Bell className="w-3.5 h-3.5" aria-hidden="true" />
+                                <span>{isVi ? 'Thử hiển thị' : 'Preview'}</span>
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void handleSendCampaign(cmp)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap cursor-pointer"
+                              >
+                                <Send className="w-3.5 h-3.5" aria-hidden="true" />
+                                <span>{isVi ? 'Gửi Push' : 'Send Push'}</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleEditCampaign(cmp)}
+                                className="p-2 min-h-[36px] min-w-[36px] rounded-lg border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 cursor-pointer"
+                                aria-label="Edit campaign"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
+                              </button>
+                            </>
+                          )}
+                          <DeleteActionsControl
+                            isArchived={isArchived}
+                            isVi={isVi}
+                            busy={busy}
+                            canHardDelete={canHardDelete}
+                            onDelete={(mode) =>
+                              handleDeleteCampaign(cmp.id, mode)
+                            }
+                            onRestore={() => handleRestoreCampaign(cmp.id)}
+                          />
+                        </div>
                       </div>
-                    </div>
-                  </article>
-                ))}
+                    </article>
+                  );
+                })}
               </div>
             )}
           </section>
@@ -660,7 +711,7 @@ export function NotificationManager({
             <div className="flex items-center gap-2.5">
               <Smartphone className="w-5 h-5 text-sky-600" aria-hidden="true" />
               <h2 className="text-lg font-bold text-slate-900">
-                {isVi ? 'Ứng dụng cài đặt (PWA)' : 'Installable PWA'}
+                {isVi ? 'Cài đặt ứng dụng trên thiết bị' : 'Device App & Status'}
               </h2>
             </div>
 
@@ -680,14 +731,16 @@ export function NotificationManager({
                 </dd>
               </div>
               <div className="py-2.5 flex items-center justify-between gap-4">
-                <dt className="text-slate-600">Service Worker</dt>
+                <dt className="text-slate-600">
+                  {isVi ? 'Trạng thái thông báo nền' : 'Background delivery'}
+                </dt>
                 <dd className="font-semibold text-slate-900">
                   {pushSupport.serviceWorkerReady
                     ? isVi
-                      ? 'Đã kích hoạt'
-                      : 'Active'
+                      ? 'Sẵn sàng'
+                      : 'Ready'
                     : isVi
-                      ? 'Đang chờ đăng ký'
+                      ? 'Đang chờ kích hoạt'
                       : 'Pending'}
                 </dd>
               </div>
@@ -699,14 +752,6 @@ export function NotificationManager({
                   {pushSupport.permission}
                 </dd>
               </div>
-              <div className="py-2.5 flex items-center justify-between gap-4">
-                <dt className="text-slate-600">
-                  {isVi ? 'Kênh Push' : 'Push protocol'}
-                </dt>
-                <dd className="font-semibold text-slate-900">
-                  W3C Web Push (VAPID)
-                </dd>
-              </div>
             </dl>
 
             <PWAInstallButton locale={interfaceLocale} showUnavailableHint />
@@ -716,7 +761,7 @@ export function NotificationManager({
             <div className="flex items-center gap-2.5">
               <BellRing className="w-5 h-5 text-sky-600" aria-hidden="true" />
               <h2 className="text-lg font-bold text-slate-900">
-                {isVi ? 'Đăng ký Web Push trên thiết bị này' : 'Device Push subscription'}
+                {isVi ? 'Đăng ký nhận thông báo trên thiết bị này' : 'Subscribe this device'}
               </h2>
             </div>
 
@@ -765,8 +810,8 @@ export function NotificationManager({
                 <BellRing className="w-4 h-4" aria-hidden="true" />
                 <span className="whitespace-nowrap">
                   {isVi
-                    ? 'Bật Push Notification cho trình duyệt này'
-                    : 'Enable Web Push on this browser'}
+                    ? 'Bật thông báo cho trình duyệt này'
+                    : 'Enable notifications on this browser'}
                 </span>
               </button>
             </div>

@@ -23,12 +23,16 @@ export interface UiMessages {
     flashcards: string;
     listening: string;
     game: string;
+    explore: string;
     story: string;
   };
   player: {
     stepOf: string;
     listenButton: string;
     replayButton: string;
+    repeatPrompt: string;
+    saidItButton: string;
+    saidItDone: string;
     nextButton: string;
     previousButton: string;
     finishButton: string;
@@ -137,23 +141,27 @@ const VI_MESSAGES: UiMessages = {
     learningMeta: 'Đang học',
     explanationMeta: 'Giải thích',
     ageBand: 'Độ tuổi 3–5',
-    continueButton: 'Vào bài học Trái cây',
-    openStoryButton: 'Nghe truyện khu chợ',
+    continueButton: 'Vào bài học ngay',
+    openStoryButton: 'Mở thư viện truyện kể',
   },
   modes: {
     heading: 'Chọn cách trải nghiệm cho cùng một gói bài học',
     description:
-      'Một gói kiến thức Trái cây duy nhất có thể học theo nhiều chế độ mà không sao chép nội dung gốc.',
+      'Một gói kiến thức duy nhất có thể học theo nhiều chế độ khác nhau mà không sao chép nội dung gốc.',
     guided: 'Có hướng dẫn',
     flashcards: 'Thẻ từ vựng',
     listening: 'Nghe & chọn',
     game: 'Ghép cặp',
+    explore: 'Nghe & đọc theo',
     story: 'Đọc truyện',
   },
   player: {
     stepOf: 'Hoạt động',
     listenButton: 'Nghe phát âm',
     replayButton: 'Nghe lại',
+    repeatPrompt: 'Bé nghe mẫu rồi cùng đọc to theo thật chậm và vui vẻ nhé!',
+    saidItButton: 'Con đã đọc theo!',
+    saidItDone: 'Tuyệt vời! Con đọc to rất hay.',
     nextButton: 'Tiếp theo',
     previousButton: 'Quay lại',
     finishButton: 'Hoàn thành',
@@ -162,7 +170,7 @@ const VI_MESSAGES: UiMessages = {
     tryAgain: 'Chưa đúng rồi, bé nghe lại và chọn thử hình khác nhé.',
     lessonCompleteTitle: 'Bé đã hoàn thành bài học hôm nay!',
     lessonCompleteBody:
-      'Tuyệt vời quá! Bé đã làm quen với quả táo, quả chuối và quả cam. Phụ huynh có thể chuyển chế độ trải nghiệm hoặc mở truyện kể tiếp theo.',
+      'Tuyệt vời quá! Bé đã hoàn thành tất cả các hoạt động trong gói bài học này. Phụ huynh có thể chuyển chế độ trải nghiệm hoặc mở truyện kể tiếp theo.',
     showExplanation: 'Hiện giải thích',
     hideExplanation: 'Ẩn giải thích',
     matchWordPrompt: '1. Chọn một từ',
@@ -197,27 +205,28 @@ const VI_MESSAGES: UiMessages = {
     cancelButton: 'Hủy',
     languageHeading: 'Cấu hình đa ngôn ngữ độc lập',
     languageNote:
-      'Thay đổi ngôn ngữ giao diện không làm thay đổi ngôn ngữ bé đang học. Danh sách được tải trực tiếp từ Language Registry.',
-    interfaceLocale: 'Ngôn ngữ giao diện (interfaceLocale)',
-    learningLocale: 'Ngôn ngữ đang học (learningLocale)',
-    explanationLocale: 'Ngôn ngữ giải thích (explanationLocale)',
-    narrationLocale: 'Ngôn ngữ đọc truyện (narrationLocale)',
+      'Thay đổi ngôn ngữ giao diện không làm thay đổi ngôn ngữ bé đang học.',
+    interfaceLocale: 'Ngôn ngữ giao diện',
+    learningLocale: 'Ngôn ngữ đang học',
+    explanationLocale: 'Ngôn ngữ giải thích',
+    narrationLocale: 'Ngôn ngữ đọc truyện',
     accessibilityHeading: 'Trợ năng & thời lượng học',
-    reducedMotion: 'Giảm chuyển động (Reduced motion)',
+    reducedMotion: 'Giảm chuyển động',
     dailyLimit: 'Thời lượng khuyến nghị mỗi ngày',
     minutesUnit: 'phút',
     progressHeading: 'Tiến độ học tập của bé',
     noProgressYet: 'Bé chưa hoàn thành hoạt động nào trong phiên này.',
     completedLabel: 'Đã hoàn thành',
     inProgressLabel: 'Đang học dở',
-    registryHeading: 'Language Registry (khả năng hệ thống)',
+    registryHeading: 'Ngôn ngữ đang hỗ trợ',
     statusReady: 'Sẵn sàng',
     statusPlanned: 'Đang phát triển',
     savedNotice: 'Đã lưu cài đặt',
-    accountHeading: 'Tài khoản phụ huynh (Supabase Auth)',
+    accountHeading: 'Tài khoản phụ huynh',
     accountGuestNote:
-      'Đăng nhập hoặc tạo tài khoản phụ huynh để lưu hồ sơ bé, đồng bộ tiến độ học lên MongoDB và nhận thông báo nhắc học.',
-    accountSignedInNote: 'Đã đăng nhập · Hồ sơ & tiến độ đang lưu trực tiếp trên MongoDB.',
+      'Đăng nhập bằng Google hoặc email để lưu hồ sơ bé, đồng bộ tiến độ học và nhận thông báo nhắc học.',
+    accountSignedInNote:
+      'Đã đăng nhập · Hồ sơ và tiến độ học được đồng bộ tự động.',
     emailLabel: 'Email phụ huynh',
     passwordLabel: 'Mật khẩu (tối thiểu 6 ký tự)',
     displayNameLabel: 'Tên hiển thị',
@@ -228,21 +237,21 @@ const VI_MESSAGES: UiMessages = {
     signInGoogle: 'Đăng nhập nhanh bằng Google',
     orWithEmail: 'hoặc dùng email & mật khẩu',
     signOutButton: 'Đăng xuất',
-    signUpCheckEmail:
-      'Đã tạo tài khoản! Nếu Supabase bật xác minh email, vui lòng kiểm tra hộp thư để kích hoạt rồi đăng nhập.',
-    mediaHeading: 'Thư viện học liệu hệ thống (Supabase Storage)',
+    signUpCheckEmail: 'Đã tạo tài khoản phụ huynh thành công.',
+    mediaHeading: 'Thư viện học liệu',
     mediaSubtitle:
-      'Quản trị viên và giáo viên tải lên tranh minh họa, file thu âm giọng đọc cho kho bài học chung (tối đa 10MB).',
-    mediaSignInHint: 'Chỉ tài khoản Quản trị viên hoặc Giáo viên mới có quyền quản lý học liệu.',
+      'Quản trị viên và giáo viên tải lên tranh minh họa và file thu âm giọng đọc (tối đa 10MB).',
+    mediaSignInHint:
+      'Chỉ tài khoản Quản trị viên hoặc Giáo viên mới có quyền quản lý học liệu.',
     mediaTitleLabel: 'Tên học liệu',
     mediaFileLabel: 'Chọn ảnh (PNG/JPG/WEBP) hoặc âm thanh (MP3/WAV/M4A)',
     mediaUploadButton: 'Tải lên',
     mediaUploading: 'Đang tải lên...',
     mediaEmpty: 'Chưa có học liệu nào được tải lên.',
     mediaDelete: 'Xóa',
-    openAdminTitle: 'Bộ quản trị hệ thống',
+    openAdminTitle: 'Quản trị hệ thống',
     openAdminDesc:
-      'Quản lý nội dung học liệu Supabase Storage, chiến dịch thông báo Web Push, Language Registry và phân quyền.',
+      'Quản lý bài học, truyện kể, học liệu, thông báo, ngôn ngữ và phân quyền nhân sự.',
     openAdminButton: 'Mở quản trị hệ thống',
     roleParent: 'Phụ huynh',
     roleTeacher: 'Giáo viên',
@@ -269,32 +278,36 @@ const EN_MESSAGES: UiMessages = {
     learningMeta: 'Learning',
     explanationMeta: 'Explanation',
     ageBand: 'Ages 3–5',
-    continueButton: 'Open Fruits Lesson',
-    openStoryButton: 'Read Market Story',
+    continueButton: 'Start Learning',
+    openStoryButton: 'Open Picture Stories',
   },
   modes: {
     heading: 'Choose an experience mode for this learning package',
     description:
-      'A single Fruits learning package powers multiple experiences without duplicating underlying vocabulary content.',
+      'A single learning package powers multiple experiences without duplicating underlying vocabulary content.',
     guided: 'Guided',
     flashcards: 'Flashcards',
     listening: 'Listening',
     game: 'Match Game',
+    explore: 'Listen & Say',
     story: 'Story',
   },
   player: {
     stepOf: 'Activity',
     listenButton: 'Listen',
     replayButton: 'Replay',
+    repeatPrompt: 'Listen carefully and say the word aloud together — no rush, no scores!',
+    saidItButton: 'I said it aloud!',
+    saidItDone: 'Awesome voice! Ready for the next word.',
     nextButton: 'Next',
     previousButton: 'Back',
     finishButton: 'Finish',
     restartButton: 'Play Again',
-    greatJob: 'Wonderful! You found the right fruit.',
+    greatJob: 'Wonderful! You did a great job.',
     tryAgain: 'Good try! Listen once more and tap another picture.',
     lessonCompleteTitle: 'You finished today’s lesson!',
     lessonCompleteBody:
-      'Well done! You practiced apple, banana, and orange. Switch experience modes or open the Fruit Market story anytime.',
+      'Well done! You completed every activity in this learning package. Switch experience modes or open a picture story anytime.',
     showExplanation: 'Show explanation',
     hideExplanation: 'Hide explanation',
     matchWordPrompt: '1. Tap a word',
@@ -329,11 +342,11 @@ const EN_MESSAGES: UiMessages = {
     cancelButton: 'Cancel',
     languageHeading: 'Independent locale settings',
     languageNote:
-      'Switching interface locale never alters the child’s learning locale. Options are loaded directly from the Language Registry.',
-    interfaceLocale: 'Interface language (interfaceLocale)',
-    learningLocale: 'Learning language (learningLocale)',
-    explanationLocale: 'Explanation language (explanationLocale)',
-    narrationLocale: 'Narration language (narrationLocale)',
+      'Switching interface language never alters the child’s learning language.',
+    interfaceLocale: 'Interface language',
+    learningLocale: 'Learning language',
+    explanationLocale: 'Explanation language',
+    narrationLocale: 'Narration language',
     accessibilityHeading: 'Accessibility & session rhythm',
     reducedMotion: 'Reduced motion',
     dailyLimit: 'Suggested daily duration',
@@ -342,14 +355,15 @@ const EN_MESSAGES: UiMessages = {
     noProgressYet: 'No lesson activity saved yet for this learner.',
     completedLabel: 'Completed',
     inProgressLabel: 'In progress',
-    registryHeading: 'Language Registry capabilities',
+    registryHeading: 'Supported languages',
     statusReady: 'Ready',
     statusPlanned: 'Planned',
     savedNotice: 'Settings saved',
-    accountHeading: 'Parent account (Supabase Auth)',
+    accountHeading: 'Parent account',
     accountGuestNote:
-      'Sign in or create a parent account to save learner profiles, sync progress to MongoDB, and receive study reminders.',
-    accountSignedInNote: 'Signed in · Profiles and progress sync directly to MongoDB.',
+      'Sign in with Google or email to save learner profiles, sync progress across devices, and receive study reminders.',
+    accountSignedInNote:
+      'Signed in · Learner profiles and progress sync automatically.',
     emailLabel: 'Parent email',
     passwordLabel: 'Password (min 6 characters)',
     displayNameLabel: 'Display name',
@@ -360,12 +374,12 @@ const EN_MESSAGES: UiMessages = {
     signInGoogle: 'Continue with Google',
     orWithEmail: 'or use email & password',
     signOutButton: 'Sign out',
-    signUpCheckEmail:
-      'Account created! If email confirmation is enabled in Supabase, please check your inbox before signing in.',
-    mediaHeading: 'System Learning Media Library (Supabase Storage)',
+    signUpCheckEmail: 'Parent account created successfully.',
+    mediaHeading: 'Learning Media Library',
     mediaSubtitle:
-      'Administrators and teachers upload curriculum illustrations and narration audio for shared lessons (up to 10MB).',
-    mediaSignInHint: 'Only Administrator or Teacher accounts can manage system learning media.',
+      'Administrators and teachers upload curriculum illustrations and narration audio (up to 10MB).',
+    mediaSignInHint:
+      'Only Administrator or Teacher accounts can manage system learning media.',
     mediaTitleLabel: 'Asset title',
     mediaFileLabel: 'Choose image (PNG/JPG/WEBP) or audio (MP3/WAV/M4A)',
     mediaUploadButton: 'Upload',
@@ -374,7 +388,7 @@ const EN_MESSAGES: UiMessages = {
     mediaDelete: 'Delete',
     openAdminTitle: 'System Administration',
     openAdminDesc:
-      'Manage Supabase Storage curriculum media, Web Push campaigns, Language Registry, and staff roles.',
+      'Manage lessons, stories, media library, notifications, languages, and staff permissions.',
     openAdminButton: 'Open System Admin',
     roleParent: 'Parent',
     roleTeacher: 'Teacher',

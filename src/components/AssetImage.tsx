@@ -13,10 +13,11 @@ export function AssetImage({
   altOverride,
   className = 'w-full h-full object-cover',
 }: AssetImageProps) {
-  const [failed, setFailed] = useState(false);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const entry = resolveVisualAsset(assetRef);
+  const hasFailed = !entry.src || failedSrc === entry.src;
 
-  if (!entry.src || failed) {
+  if (hasFailed) {
     return (
       <div
         className={`flex flex-col items-center justify-center gap-2 ${entry.fallbackBg} text-slate-600 ${className}`}
@@ -34,7 +35,7 @@ export function AssetImage({
       src={entry.src}
       alt={altOverride ?? entry.alt}
       referrerPolicy="no-referrer"
-      onError={() => setFailed(true)}
+      onError={() => setFailedSrc(entry.src)}
       className={className}
     />
   );

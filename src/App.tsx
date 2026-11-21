@@ -1,220 +1,343 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Globe } from 'lucide-react';
-import type { User } from '@supabase/supabase-js';
+import { usePathname, useRouter } from 'next/navigation';
+import {
+  Award,
+  BookOpen,
+  Check,
+  Clock,
+  GraduationCap,
+  Layers,
+  Settings,
+  Sparkles,
+  Sun,
+  User,
+  Users,
+} from 'lucide-react';
 import type {
+  AgeGroupConfig,
   AuthUserProfile,
+  DeleteMode,
   ExperienceMode,
   LearnerPreferences,
   LearnerProfile,
+  LearningPackageSummary,
   LessonProgressRecord,
   LocaleConfig,
   MediaAssetRecord,
 } from '../packages/contracts/types';
-import { isSupabaseConfigured, supabase } from './lib/supabase';
+import {
+  signInParentWithEmail,
+  signInParentWithGoogle,
+  signOutParent,
+  signUpParentWithEmail,
+  subscribeParentAuth,
+} from './lib/firebaseAuth';
 import { apiClient } from './shared/apiClient';
+import { flushOfflineQueue } from './lib/offlineQueue';
+import {
+  getTodayDateKey,
+  isParentalGateEnabled,
+  loadLearnerRewards,
+} from './lib/learnerRewards';
+import {
+  applyAppearanceToDocument,
+  loadAppearanceSettings,
+  saveAppearanceSettings,
+  type AppAccentColor,
+  type AppAppearanceSettings,
+  type AppThemeMode,
+} from './lib/appAppearance';
 import { getUiMessages } from './i18n/messages';
 import { AssetImage } from './components/AssetImage';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { NotificationBell } from './components/NotificationBell';
+import { StickerBookModal } from './components/StickerBookModal';
+import { ParentalGateModal } from './components/ParentalGateModal';
+import { SettingsSlideover } from './components/SettingsSlideover';
+import { AccountAuthModal } from './components/AccountAuthModal';
+import { LandingHomepage } from './components/LandingHomepage';
+import { LearnerOnboardingFlow } from './components/LearnerOnboardingFlow';
+import { BrandLogo } from './components/BrandLogo';
+import { AppLoadingScreen } from './components/AppLoadingScreen';
 import { LessonPlayer } from './features/lesson-player/LessonPlayer';
 import { StoryReader } from './features/story-reader/StoryReader';
 import { ParentPanel } from './features/parent/ParentPanel';
-import {
-  AdminWorkspace,
-  type AdminSection,
-} from './features/admin/AdminWorkspace';
+import { AdminWorkspace } from './features/admin/AdminWorkspace';
 import { AdminLoginView } from './features/admin/AdminLoginView';
 
 type AppTab = 'learn' | 'stories' | 'parents' | 'admin';
 
-function getInitialTab(): AppTab {
-  if (typeof window === 'undefined') return 'learn';
-  const param = new URLSearchParams(window.location.search).get('tab');
-  if (param === 'stories' || param === 'parents' || param === 'admin') {
-    return param;
-  }
-  return 'learn';
+interface AppProps {
+  initialTab?: AppTab;
 }
 
-function mapSupabaseUser(user: User | null): AuthUserProfile | null {
-  if (!user) return null;
-  const meta = user.user_metadata as Record<string, unknown> | undefined;
-  const appMeta = user.app_metadata as Record<string, unknown> | undefined;
-  const rawRole = appMeta?.role;
-  const role =
-    rawRole === 'admin' || rawRole === 'teacher' || rawRole === 'parent'
-      ? rawRole
-      : 'parent';
-  const displayName =
-    typeof meta?.full_name === 'string' && meta.full_name.trim()
-      ? meta.full_name.trim()
-      : typeof meta?.name === 'string' && meta.name.trim()
-        ? meta.name.trim()
-        : user.email ?? null;
-  return {
-    id: user.id,
-    email: user.email ?? null,
-    displayName,
-    role,
-    provider: 'supabase',
-  };
-}
+export function App({ initialTab = 'learn' }: AppProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const [activeTab, setActiveTab] = useState<AppTab>(initialTab);
 
-export function App() {
-  const [activeTab, setActiveTab] = useState<AppTab>(getInitialTab);
-  const [adminSection, setAdminSection] =
-    useState<AdminSection>('notifications');
-  const [authUser, setAuthUser] = useState<AuthUserProfile | null>(null);
-  const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
-  const [authBusy, setAuthBusy] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [authNotice, setAuthNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (window.location.hash) {
+      const hashId = window.location.hash.slice(1);
+      if (hashId === 'pathways' || hashId === 'method' || hashId === 'start') {
+        const cleanUrl = `${window.location.pathname}${window.location.search}`;
+        window.history.replaceState(null, '', cleanUrl);
+        requestAnimationFrame(() => {
+          document
+            .getElementById(hashId)
+            ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      }
+    }
+
+    if (initialTab === 'admin' || pathname === '/admin') {
+      setActiveTab('admin');
+      return;
+    }
+    const param = new URLSearchParams(window.location.search).get('tab');
+    if (param === 'stories' || param === 'parents' || param === 'admin') {
+      setActiveTab(param);
+    }
+  }, [initialTab, pathname]);
+
+  const scrollToLandingSection = useCallback(
+    (sectionId: 'pathways' | 'method' | 'start') => {
+      document
+        .getElementById(sectionId)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+    []
+  );
+
+  // Global App Appearance (Dark/Light/System, Accent Color, Language, Reduced Motion)
+  const [appearance, setAppearance] = useState<AppAppearanceSettings>({
+    themeMode: 'light',
+    accentColor: 'sky',
+    guestLocale: 'vi',
+    reducedMotion: false,
+  });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Account Auth Modal & Pre-selected Age Band from Landing Page
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup'>(
+    'signup'
+  );
+  const [pendingPreferredAgeBand, setPendingPreferredAgeBand] = useState<
+    string | null
+  >(null);
+
+  // Hydrate & sync document theme + accent classes
+  useEffect(() => {
+    const initial = loadAppearanceSettings();
+    setAppearance(initial);
+    applyAppearanceToDocument(initial);
+  }, []);
+
+  useEffect(() => {
+    applyAppearanceToDocument(appearance);
+    saveAppearanceSettings(appearance);
+
+    if (appearance.themeMode !== 'system' || typeof window === 'undefined') {
+      return;
+    }
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleMediaChange = () => applyAppearanceToDocument(appearance);
+    mq.addEventListener('change', handleMediaChange);
+    return () => mq.removeEventListener('change', handleMediaChange);
+  }, [appearance]);
+
+  // Dual Auth Track 1: Parent Account
+  const [parentUser, setParentUser] = useState<AuthUserProfile | null>(null);
+  const [parentAuthBusy, setParentAuthBusy] = useState(false);
+  const [parentAuthError, setParentAuthError] = useState<string | null>(null);
+  const [parentAuthNotice, setParentAuthNotice] = useState<string | null>(null);
+
+  // Dual Auth Track 2: Staff Session
+  const [staffUser, setStaffUser] = useState<AuthUserProfile | null>(null);
+  const [iamMode, setIamMode] = useState<'tm-hub' | 'local-dev'>('local-dev');
+  const [staffBusy, setStaffBusy] = useState(false);
+  const [staffError, setStaffError] = useState<string | null>(null);
 
   const [languages, setLanguages] = useState<LocaleConfig[]>([]);
+  const [ageGroups, setAgeGroups] = useState<AgeGroupConfig[]>([]);
+  const [packageAgeFilter, setPackageAgeFilter] = useState<string>('all');
+  const [packages, setPackages] = useState<LearningPackageSummary[]>([]);
+  const [activePackageId, setActivePackageId] = useState<string>('lp-fruits-a1');
   const [learners, setLearners] = useState<LearnerProfile[]>([]);
   const [activeLearnerId, setActiveLearnerId] = useState<string>('');
   const [progressRecords, setProgressRecords] = useState<LessonProgressRecord[]>(
     []
   );
   const [mediaAssets, setMediaAssets] = useState<MediaAssetRecord[]>([]);
+  const [storageSummary, setStorageSummary] = useState<{
+    bucket: string;
+    provider: string;
+  }>({ bucket: 'local-public', provider: 'local-public' });
   const [experienceMode, setExperienceMode] =
     useState<ExperienceMode>('guided');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastSyncedCount, setLastSyncedCount] = useState(0);
+  const [dailyUsedSeconds, setDailyUsedSeconds] = useState(0);
+  const [extraMinutesGranted, setExtraMinutesGranted] = useState(0);
 
-  const syncServerUser = useCallback(async (fallbackUser: User | null) => {
-    if (!fallbackUser) {
-      setAuthUser(null);
-      return;
-    }
-    const optimistic = mapSupabaseUser(fallbackUser);
-    setAuthUser(optimistic);
-    try {
-      const res = await apiClient.getCurrentUser();
-      if (res.user) {
-        setAuthUser(res.user);
-      }
-    } catch {
-      // Keep optimistic parent fallback if network temporarily fails
-    }
-  }, []);
+  // Interactive UX overlays: Kid Focus Mode, Sticker Book, Parental Gate
+  const [kidFocusMode, setKidFocusMode] = useState(false);
+  const [stickerBookOpen, setStickerBookOpen] = useState(false);
+  const [parentGateOpen, setParentGateOpen] = useState(false);
+  const [parentGateUnlockedSession, setParentGateUnlockedSession] =
+    useState(false);
 
-  // Subscribe to Supabase Auth session state and verify server-authoritative role
+  // Subscribe to Parent Auth (non-blocking)
   useEffect(() => {
-    if (!supabase) {
-      setAuthReady(true);
-      return;
-    }
-
     let mounted = true;
-    supabase.auth
-      .getSession()
-      .then(async ({ data }) => {
-        if (!mounted) return;
-        await syncServerUser(data.session?.user ?? null);
-        if (mounted) setAuthReady(true);
-      })
-      .catch(() => {
-        if (mounted) setAuthReady(true);
-      });
-
-    const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        void syncServerUser(session?.user ?? null).finally(() => {
-          if (mounted) setAuthReady(true);
-        });
+    const unsubscribe = subscribeParentAuth((fbUser) => {
+      if (!mounted) return;
+      if (!fbUser) {
+        setParentUser(null);
+        setLearners([]);
+        setActiveLearnerId('');
+        setProgressRecords([]);
+        return;
       }
-    );
+      setParentUser({
+        id: fbUser.uid,
+        email: fbUser.email ?? null,
+        displayName: fbUser.displayName ?? fbUser.email ?? null,
+        role: 'parent',
+        provider: 'firebase',
+      });
+      setAuthModalOpen(false);
+      setParentAuthError(null);
+      apiClient
+        .getCurrentUser()
+        .then((res) => {
+          if (mounted && res.user) {
+            setParentUser(res.user);
+          }
+        })
+        .catch(() => {
+          // Keep optimistic parent profile
+        });
+    });
 
     return () => {
       mounted = false;
-      listener.subscription.unsubscribe();
+      unsubscribe();
     };
-  }, [syncServerUser]);
-
-  // Listen for popup OAuth callback messages from /auth/callback
-  useEffect(() => {
-    const client = supabase;
-    if (!client) return;
-    const handleMessage = async (event: MessageEvent) => {
-      const origin = event.origin;
-      if (
-        origin !== window.location.origin &&
-        !origin.endsWith('.run.app') &&
-        !origin.includes('localhost')
-      ) {
-        return;
-      }
-      const data = event.data as {
-        type?: string;
-        code?: string | null;
-        accessToken?: string | null;
-        refreshToken?: string | null;
-        error?: string | null;
-      } | null;
-      if (!data || data.type !== 'SUPABASE_OAUTH_CALLBACK') return;
-
-      setAuthBusy(true);
-      setAuthError(null);
-      setAuthNotice(null);
-      try {
-        if (data.error) {
-          throw new Error(data.error);
-        }
-        if (data.code) {
-          const { error: exchangeErr } =
-            await client.auth.exchangeCodeForSession(data.code);
-          if (exchangeErr) throw exchangeErr;
-        } else if (data.accessToken && data.refreshToken) {
-          const { error: sessionErr } = await client.auth.setSession({
-            access_token: data.accessToken,
-            refresh_token: data.refreshToken,
-          });
-          if (sessionErr) throw sessionErr;
-        }
-      } catch (err) {
-        setAuthError(
-          err instanceof Error ? err.message : 'Google sign-in failed'
-        );
-      } finally {
-        setAuthBusy(false);
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
   }, []);
 
-  // Register push notification service worker
+  // Check Staff session on mount
+  useEffect(() => {
+    let mounted = true;
+    apiClient
+      .getHealth()
+      .then((health) => {
+        if (mounted) {
+          setIamMode(health.iamMode);
+          setStorageSummary({
+            bucket: health.storageBucket,
+            provider: health.storageProvider,
+          });
+        }
+      })
+      .catch(() => undefined);
+
+    apiClient
+      .getStaffMe()
+      .then((res) => {
+        if (mounted) {
+          setStaffUser(res.user);
+          setIamMode(res.iamMode);
+        }
+      })
+      .catch(() => {
+        if (mounted) setStaffUser(null);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Service worker maintenance
   useEffect(() => {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/push-sw.js').catch((err) => {
-        console.warn('Service worker registration failed:', err);
-      });
+      navigator.serviceWorker
+        .getRegistrations()
+        .then((registrations) =>
+          Promise.all(
+            registrations
+              .filter((reg) => {
+                const scriptUrl =
+                  reg.active?.scriptURL ||
+                  reg.waiting?.scriptURL ||
+                  reg.installing?.scriptURL ||
+                  '';
+                return (
+                  scriptUrl.includes('/dev-sw.js') ||
+                  scriptUrl.endsWith('/sw.js')
+                );
+              })
+              .map((reg) => reg.unregister())
+          )
+        )
+        .catch(() => undefined)
+        .finally(() => {
+          navigator.serviceWorker.register('/push-sw.js').catch((err) => {
+            console.warn('Service worker registration failed:', err);
+          });
+        });
     }
   }, []);
 
-  const isStaff = authUser?.role === 'admin' || authUser?.role === 'teacher';
+  const loadPublishedPackages = useCallback(async () => {
+    try {
+      const res = await apiClient.getPackages();
+      setPackages(res.packages);
+      if (res.packages.length > 0) {
+        setActivePackageId((prev) =>
+          res.packages.some((p) => p.id === prev) ? prev : res.packages[0].id
+        );
+      }
+    } catch {
+      // non-blocking
+    }
+  }, []);
 
   const loadBootstrapData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [langRes, learnerRes] = await Promise.all([
+      const [langRes, ageRes, learnerRes, pkgRes] = await Promise.all([
         apiClient.getLanguages(),
+        apiClient.getAgeGroups().catch(() => ({ ageGroups: [] })),
         apiClient.getLearners(),
+        apiClient.getPackages(),
       ]);
       setLanguages(langRes.languages);
+      setAgeGroups(ageRes.ageGroups);
       setLearners(learnerRes.learners);
+      setPackages(pkgRes.packages);
+      if (pkgRes.packages.length > 0) {
+        setActivePackageId((prev) =>
+          pkgRes.packages.some((p) => p.id === prev)
+            ? prev
+            : pkgRes.packages[0].id
+        );
+      }
       if (learnerRes.learners.length > 0) {
         setActiveLearnerId((prev) =>
           learnerRes.learners.some((l) => l.id === prev)
             ? prev
             : learnerRes.learners[0].id
         );
+      } else {
+        setActiveLearnerId('');
       }
     } catch (err) {
       setError(
@@ -226,30 +349,44 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (authReady) {
-      void loadBootstrapData();
-    }
-  }, [authReady, authUser?.id, loadBootstrapData]);
+    void loadBootstrapData();
+  }, [parentUser?.id, loadBootstrapData]);
 
-  // Load system media library ONLY for authenticated staff (Admin / Teacher)
-  useEffect(() => {
-    if (!authReady || !isStaff) {
+  const loadLanguages = useCallback(async () => {
+    try {
+      const res = await apiClient.getLanguages();
+      setLanguages(res.languages);
+    } catch {
+      // non-blocking
+    }
+  }, []);
+
+  const loadAgeGroups = useCallback(async () => {
+    try {
+      const res = await apiClient.getAgeGroups();
+      setAgeGroups(res.ageGroups);
+    } catch {
+      // non-blocking
+    }
+  }, []);
+
+  const loadAdminMedia = useCallback(async () => {
+    if (!staffUser) {
       setMediaAssets([]);
       return;
     }
-    let active = true;
-    apiClient
-      .listMedia()
-      .then((res) => {
-        if (active) setMediaAssets(res.assets);
-      })
-      .catch(() => {
-        if (active) setMediaAssets([]);
-      });
-    return () => {
-      active = false;
-    };
-  }, [authReady, isStaff, authUser?.id]);
+    try {
+      const res = await apiClient.listMedia({ includeArchived: true });
+      setMediaAssets(res.assets);
+      setStorageSummary({ bucket: res.bucket, provider: res.provider });
+    } catch {
+      setMediaAssets([]);
+    }
+  }, [staffUser]);
+
+  useEffect(() => {
+    void loadAdminMedia();
+  }, [loadAdminMedia]);
 
   const refreshProgress = useCallback(async (learnerId: string) => {
     if (!learnerId) return;
@@ -264,148 +401,237 @@ export function App() {
   useEffect(() => {
     if (!activeLearnerId) return;
     void refreshProgress(activeLearnerId);
-  }, [activeLearnerId, authUser?.id, refreshProgress]);
+  }, [activeLearnerId, parentUser?.id, refreshProgress]);
+
+  // Flush IndexedDB offline sync queue on mount and reconnect
+  useEffect(() => {
+    let active = true;
+    const runFlush = () => {
+      void flushOfflineQueue({
+        syncProgress: (lessonId, payload) =>
+          apiClient.saveProgress(lessonId, payload),
+        syncStoryPosition: (storyId, payload) =>
+          apiClient.saveStoryPosition(storyId, payload),
+      }).then((res) => {
+        if (!active || res.synced === 0) return;
+        setLastSyncedCount(res.synced);
+        if (activeLearnerId) {
+          void refreshProgress(activeLearnerId);
+        }
+        setTimeout(() => {
+          if (active) setLastSyncedCount(0);
+        }, 4000);
+      });
+    };
+
+    runFlush();
+    window.addEventListener('online', runFlush);
+    return () => {
+      active = false;
+      window.removeEventListener('online', runFlush);
+    };
+  }, [activeLearnerId, refreshProgress]);
+
+  // Gentle daily learning time limit tracker per learner per day
+  useEffect(() => {
+    if (!activeLearnerId || typeof window === 'undefined') return;
+    const today = new Date().toISOString().slice(0, 10);
+    const storageKey = `tm_lingo_usage_${today}_${activeLearnerId}`;
+    try {
+      const stored = Number(window.localStorage.getItem(storageKey) || '0');
+      setDailyUsedSeconds(Number.isFinite(stored) ? stored : 0);
+    } catch {
+      setDailyUsedSeconds(0);
+    }
+    setExtraMinutesGranted(0);
+  }, [activeLearnerId]);
+
+  useEffect(() => {
+    if (
+      !activeLearnerId ||
+      (activeTab !== 'learn' && activeTab !== 'stories') ||
+      typeof window === 'undefined'
+    ) {
+      return;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const storageKey = `tm_lingo_usage_${today}_${activeLearnerId}`;
+    const timer = window.setInterval(() => {
+      setDailyUsedSeconds((prev) => {
+        const next = prev + 15;
+        try {
+          window.localStorage.setItem(storageKey, String(next));
+        } catch {
+          // ignore storage quota errors
+        }
+        return next;
+      });
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [activeLearnerId, activeTab]);
 
   const activeLearner =
     learners.find((l) => l.id === activeLearnerId) ?? learners[0] ?? null;
 
+  // Automatically match lesson shelf filter & active package to the learner's exact age band
+  const activeLearnerAgeBand = activeLearner?.ageBand ?? '';
+  useEffect(() => {
+    if (!activeLearnerAgeBand) return;
+    setPackageAgeFilter(activeLearnerAgeBand);
+    if (packages.length === 0) return;
+    const matched = packages.filter((p) =>
+      p.ageBand.includes(activeLearnerAgeBand)
+    );
+    if (matched.length > 0) {
+      setActivePackageId((prev) =>
+        matched.some((p) => p.id === prev) ? prev : matched[0].id
+      );
+    }
+  }, [activeLearner?.id, activeLearnerAgeBand, packages]);
+
   const uiLocales = languages.filter((l) => l.enabled && l.uiEnabled);
   const currentInterfaceLocale =
-    activeLearner?.preferences.interfaceLocale ?? 'vi';
+    activeLearner?.preferences.interfaceLocale ?? appearance.guestLocale ?? 'vi';
   const messages = getUiMessages(currentInterfaceLocale);
 
   useEffect(() => {
     document.documentElement.lang = currentInterfaceLocale;
   }, [currentInterfaceLocale]);
 
-  const handleSignInGoogle = async () => {
-    if (!supabase) {
-      setAuthError('Supabase Auth is not configured.');
-      return;
+  // ---------- Appearance & Settings Handlers ----------
+  const handleChangeThemeMode = (themeMode: AppThemeMode) => {
+    setAppearance((prev) => ({ ...prev, themeMode }));
+  };
+
+  const handleChangeAccentColor = (accentColor: AppAccentColor) => {
+    setAppearance((prev) => ({ ...prev, accentColor }));
+  };
+
+  const handleChangeReducedMotion = (reducedMotion: boolean) => {
+    setAppearance((prev) => ({ ...prev, reducedMotion }));
+    if (activeLearner) {
+      void handleUpdatePreferences({ reducedMotion });
     }
-    setAuthBusy(true);
-    setAuthError(null);
-    setAuthNotice(null);
+  };
+
+  const handleChangeInterfaceLocale = (locale: string) => {
+    setAppearance((prev) => ({ ...prev, guestLocale: locale }));
+    if (activeLearner) {
+      void handleUpdatePreferences({ interfaceLocale: locale });
+    }
+  };
+
+  const openAuthModal = (
+    mode: 'signin' | 'signup',
+    preferredAgeBand?: string
+  ) => {
+    setParentAuthError(null);
+    setParentAuthNotice(null);
+    if (preferredAgeBand !== undefined) {
+      setPendingPreferredAgeBand(preferredAgeBand);
+    }
+    setAuthModalMode(mode);
+    setAuthModalOpen(true);
+  };
+
+  // ---------- Parent Auth Handlers ----------
+  const handleParentSignInGoogle = async () => {
+    setParentAuthBusy(true);
+    setParentAuthError(null);
+    setParentAuthNotice(null);
     try {
-      const redirectTo = `${window.location.origin}/auth/callback`;
-      const { data, error: oauthErr } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo,
-          skipBrowserRedirect: true,
-          queryParams: {
-            prompt: 'select_account',
-          },
-        },
-      });
-      if (oauthErr) throw oauthErr;
-      if (!data?.url) {
-        throw new Error('Could not initialize Google sign-in URL.');
-      }
-
-      const width = 520;
-      const height = 640;
-      const left = Math.max(0, window.screenX + (window.outerWidth - width) / 2);
-      const top = Math.max(0, window.screenY + (window.outerHeight - height) / 2);
-      const popup = window.open(
-        data.url,
-        'tm_lingo_google_oauth',
-        `width=${width},height=${height},left=${Math.round(left)},top=${Math.round(top)},resizable=yes,scrollbars=yes`
-      );
-      if (!popup) {
-        setAuthError(
-          currentInterfaceLocale === 'vi'
-            ? 'Trình duyệt đang chặn cửa sổ bật lên (popup). Hãy cho phép popup rồi thử lại.'
-            : 'Popup was blocked by your browser. Please allow popups and try again.'
-        );
-        setAuthBusy(false);
-        return;
-      }
-
-      const pollTimer = window.setInterval(() => {
-        if (popup.closed) {
-          window.clearInterval(pollTimer);
-          setAuthBusy(false);
-        }
-      }, 600);
+      await signInParentWithGoogle();
     } catch (err) {
-      setAuthError(
+      setParentAuthError(
         err instanceof Error ? err.message : 'Google sign-in failed'
       );
-      setAuthBusy(false);
-    }
-  };
-
-  const handleSignInEmail = async (email: string, password: string) => {
-    if (!supabase) {
-      setAuthError('Supabase Auth is not configured.');
-      return;
-    }
-    setAuthBusy(true);
-    setAuthError(null);
-    setAuthNotice(null);
-    try {
-      const { error: signInErr } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
-      if (signInErr) throw signInErr;
-    } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Sign-in failed');
     } finally {
-      setAuthBusy(false);
+      setParentAuthBusy(false);
     }
   };
 
-  const handleSignUpEmail = async (
+  const handleParentSignInEmail = async (email: string, password: string) => {
+    setParentAuthBusy(true);
+    setParentAuthError(null);
+    setParentAuthNotice(null);
+    try {
+      await signInParentWithEmail(email, password);
+    } catch (err) {
+      setParentAuthError(err instanceof Error ? err.message : 'Sign-in failed');
+    } finally {
+      setParentAuthBusy(false);
+    }
+  };
+
+  const handleParentSignUpEmail = async (
     email: string,
     password: string,
     displayName: string
   ) => {
-    if (!supabase) {
-      setAuthError('Supabase Auth is not configured.');
-      return;
-    }
-    setAuthBusy(true);
-    setAuthError(null);
-    setAuthNotice(null);
+    setParentAuthBusy(true);
+    setParentAuthError(null);
+    setParentAuthNotice(null);
     try {
-      const { data, error: signUpErr } = await supabase.auth.signUp({
-        email: email.trim(),
-        password,
-        options: {
-          data: {
-            full_name: displayName.trim() || email.split('@')[0],
-          },
-        },
-      });
-      if (signUpErr) throw signUpErr;
-      if (!data.session) {
-        setAuthNotice(messages.parent.signUpCheckEmail);
-      }
+      await signUpParentWithEmail(email, password, displayName);
+      setParentAuthNotice(messages.parent.signUpCheckEmail);
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Sign-up failed');
+      setParentAuthError(err instanceof Error ? err.message : 'Sign-up failed');
     } finally {
-      setAuthBusy(false);
+      setParentAuthBusy(false);
     }
   };
 
-  const handleSignOut = async () => {
-    if (!supabase) return;
-    setAuthBusy(true);
-    setAuthError(null);
-    setAuthNotice(null);
+  const handleParentSignOut = async () => {
+    setParentAuthBusy(true);
+    setParentAuthError(null);
+    setParentAuthNotice(null);
     try {
-      await supabase.auth.signOut();
+      await signOutParent();
+      setLearners([]);
+      setActiveLearnerId('');
       setProgressRecords([]);
-      setMediaAssets([]);
+      setActiveTab('learn');
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Sign-out failed');
+      setParentAuthError(err instanceof Error ? err.message : 'Sign-out failed');
     } finally {
-      setAuthBusy(false);
+      setParentAuthBusy(false);
     }
   };
 
+  // ---------- Staff Auth Handlers ----------
+  const handleStaffLogin = async (email: string, password: string) => {
+    setStaffBusy(true);
+    setStaffError(null);
+    try {
+      const res = await apiClient.staffLogin(email, password);
+      setStaffUser(res.user);
+      setIamMode(res.iamMode);
+    } catch (err) {
+      setStaffError(
+        err instanceof Error ? err.message : 'Staff sign-in failed'
+      );
+    } finally {
+      setStaffBusy(false);
+    }
+  };
+
+  const handleStaffSignOut = async () => {
+    setStaffBusy(true);
+    try {
+      await apiClient.staffLogout();
+      setStaffUser(null);
+      setMediaAssets([]);
+      if (pathname === '/admin') {
+        router.push('/');
+      } else {
+        setActiveTab('learn');
+      }
+    } finally {
+      setStaffBusy(false);
+    }
+  };
+
+  // ---------- Learner & Media Handlers ----------
   const handleUpdatePreferences = async (patch: Partial<LearnerPreferences>) => {
     if (!activeLearner) return;
     setLearners((prev) =>
@@ -415,7 +641,10 @@ export function App() {
           : l
       )
     );
-    const res = await apiClient.updateLearnerPreferences(activeLearner.id, patch);
+    const res = await apiClient.updateLearnerPreferences(
+      activeLearner.id,
+      patch
+    );
     setLearners((prev) =>
       prev.map((l) => (l.id === res.learner.id ? res.learner : l))
     );
@@ -424,21 +653,57 @@ export function App() {
   const handleCreateLearner = async (payload: {
     nickname: string;
     ageYears: number;
+    ageBand?: string;
+    gradeLevel?: number | null;
     avatarTone: LearnerProfile['avatarTone'];
+    learningLocale?: string;
+    explanationLocale?: string;
   }) => {
-    const basePrefs = {
-      interfaceLocale: activeLearner?.preferences.interfaceLocale ?? 'vi',
-      learningLocale: activeLearner?.preferences.learningLocale ?? 'en',
-      explanationLocale: activeLearner?.preferences.explanationLocale ?? 'vi',
-      narrationLocale: activeLearner?.preferences.narrationLocale ?? 'en',
-    };
+    const learningLocale =
+      payload.learningLocale ??
+      activeLearner?.preferences.learningLocale ??
+      'en';
+    const explanationLocale =
+      payload.explanationLocale ??
+      activeLearner?.preferences.explanationLocale ??
+      (currentInterfaceLocale === 'en' ? 'en' : 'vi');
 
     const res = await apiClient.createLearner({
-      ...payload,
-      ...basePrefs,
+      nickname: payload.nickname,
+      ageYears: payload.ageYears,
+      ageBand: payload.ageBand,
+      gradeLevel: payload.gradeLevel,
+      avatarTone: payload.avatarTone,
+      interfaceLocale: currentInterfaceLocale,
+      learningLocale,
+      explanationLocale,
+      narrationLocale: learningLocale,
     });
     setLearners((prev) => [...prev, res.learner]);
     setActiveLearnerId(res.learner.id);
+    setPackageAgeFilter(res.learner.ageBand);
+    const matchedPkg = packages.find((p) =>
+      p.ageBand.includes(res.learner.ageBand)
+    );
+    if (matchedPkg) {
+      setActivePackageId(matchedPkg.id);
+    }
+  };
+
+  const handleUpdateLearnerProfile = async (
+    learnerId: string,
+    patch: {
+      nickname?: string;
+      ageYears?: number;
+      ageBand?: string;
+      gradeLevel?: number | null;
+      applyAgeDefaults?: boolean;
+    }
+  ) => {
+    const res = await apiClient.updateLearnerProfile(learnerId, patch);
+    setLearners((prev) =>
+      prev.map((l) => (l.id === res.learner.id ? res.learner : l))
+    );
   };
 
   const handleUploadMedia = async (payload: {
@@ -450,9 +715,14 @@ export function App() {
     setMediaAssets((prev) => [res.asset, ...prev]);
   };
 
-  const handleDeleteMedia = async (assetId: string) => {
-    await apiClient.deleteMedia(assetId);
-    setMediaAssets((prev) => prev.filter((item) => item.id !== assetId));
+  const handleDeleteMedia = async (assetId: string, mode: DeleteMode) => {
+    await apiClient.deleteMedia(assetId, mode);
+    await loadAdminMedia();
+  };
+
+  const handleRestoreMedia = async (assetId: string) => {
+    await apiClient.restoreMedia(assetId);
+    await loadAdminMedia();
   };
 
   const getLocaleName = (code: string) => {
@@ -469,309 +739,900 @@ export function App() {
     }, 50);
   };
 
-  const openAdmin = (section: AdminSection = 'notifications') => {
-    setAdminSection(section);
-    setActiveTab('admin');
+  const leaveAdminToHome = () => {
+    setKidFocusMode(false);
+    if (pathname === '/admin') {
+      router.push('/');
+    } else {
+      setActiveTab('learn');
+    }
   };
 
-  const navItems: Array<[AppTab, string]> = isStaff
-    ? [
-        ['learn', messages.nav.learn],
-        ['stories', messages.nav.stories],
-        ['parents', messages.nav.parents],
-        ['admin', messages.nav.admin],
-      ]
-    : [
-        ['learn', messages.nav.learn],
-        ['stories', messages.nav.stories],
-        ['parents', messages.nav.parents],
-      ];
+  const navigateTab = (tab: AppTab) => {
+    setKidFocusMode(false);
+    if (
+      tab === 'parents' &&
+      !parentGateUnlockedSession &&
+      isParentalGateEnabled()
+    ) {
+      setParentGateOpen(true);
+      return;
+    }
+    if (pathname === '/admin' && tab !== 'admin') {
+      router.push(tab === 'learn' ? '/' : `/?tab=${tab}`);
+      return;
+    }
+    setActiveTab(tab);
+  };
+
+  const getPackageCoverRef = (pkgId: string, topicId?: string): string => {
+    if (pkgId === 'lp-farm-a1' || topicId?.includes('farm')) {
+      return 'img-story-sunny-farm';
+    }
+    if (pkgId === 'lp-fruits-a1' || topicId?.includes('fruit')) {
+      return 'img-story-fruit-market';
+    }
+    if (pkgId.includes('primary') || pkgId.includes('6-8')) {
+      return 'img-story-sunny-farm';
+    }
+    if (pkgId.includes('science') || pkgId.includes('9-11')) {
+      return 'img-story-fruit-market';
+    }
+    return 'img-apple';
+  };
+
+  const openPackageFromStory = (packageId?: string) => {
+    if (packageId && packages.some((p) => p.id === packageId)) {
+      setActivePackageId(packageId);
+    }
+    scrollToLessonStage();
+  };
+
+  const signedInActorId = parentUser?.id ?? staffUser?.id ?? null;
+  const isVi = currentInterfaceLocale === 'vi';
+  const hasAuthenticatedWorkspace = Boolean(parentUser && activeLearner);
+  const isGuestLanding = !parentUser && activeTab !== 'admin';
+  const isOnboarding = Boolean(parentUser && !activeLearner && activeTab !== 'admin');
+
+  const activeAgeGroup = activeLearner
+    ? (ageGroups.find((g) => g.id === activeLearner.ageBand) ??
+      ageGroups.find(
+        (g) =>
+          activeLearner.ageYears >= g.minAge &&
+          activeLearner.ageYears <= g.maxAge
+      ))
+    : undefined;
+
+  const filteredPackages =
+    packageAgeFilter === 'all'
+      ? packages
+      : packages.filter((p) => p.ageBand.includes(packageAgeFilter));
+
+  const todayRewards = activeLearner
+    ? loadLearnerRewards(activeLearner.id)
+    : null;
+  const todayEntry = todayRewards?.dailyLog[getTodayDateKey()];
+  const completedLessonToday = (todayEntry?.lessonsCompleted ?? 0) > 0;
+  const completedStoryToday = (todayEntry?.storiesRead ?? 0) > 0;
+
+  const dailyLimitMinutes =
+    (activeLearner?.preferences.dailyMinutesLimit ?? 15) + extraMinutesGranted;
+  const dailyUsedMinutes = Math.floor(dailyUsedSeconds / 60);
+  const isDailyLimitReached =
+    Boolean(activeLearner) && dailyUsedMinutes >= dailyLimitMinutes;
+
+  const navItems: Array<[AppTab, string]> = [
+    ['learn', messages.nav.learn],
+    ['stories', messages.nav.stories],
+    ['parents', messages.nav.parents],
+  ];
+
+  const isFocusStage =
+    kidFocusMode && activeTab === 'learn' && hasAuthenticatedWorkspace;
+  const effectiveReducedMotion =
+    appearance.reducedMotion || Boolean(activeLearner?.preferences.reducedMotion);
 
   return (
     <div
-      className={`min-h-screen flex flex-col bg-[#F8FAFC] text-[#0F172A] ${
-        activeLearner?.preferences.reducedMotion ? 'reduced-motion' : ''
-      }`}
+      className={`min-h-screen flex flex-col bg-[#F8FAFC] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F1F5F9] transition-colors ${
+        hasAuthenticatedWorkspace && !isFocusStage ? 'pb-16 md:pb-0' : ''
+      } ${effectiveReducedMotion ? 'reduced-motion' : ''}`}
     >
-      {/* Clean 3-zone Top Bar: Brand — Focused Nav — Actions (Bell only when signed in, VI/EN, Primary CTA) */}
-      <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-slate-200">
-        <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-6">
-          <button
-            type="button"
-            onClick={() => setActiveTab('learn')}
-            className="font-display text-xl font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            TM-Lingo
-          </button>
-
-          <nav
-            aria-label="Primary navigation"
-            className="flex items-center gap-6 text-sm font-medium text-slate-600"
-          >
-            {navItems.map(([tabKey, label]) => {
-              const isActive = activeTab === tabKey;
-              return (
-                <button
-                  key={tabKey}
-                  type="button"
-                  onClick={() => setActiveTab(tabKey)}
-                  className={`py-1 whitespace-nowrap shrink-0 border-b-2 transition-colors cursor-pointer ${
-                    isActive
-                      ? 'border-sky-600 text-slate-900 font-semibold'
-                      : 'border-transparent hover:text-slate-900 hover:border-slate-300'
-                  }`}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </nav>
-
-          <div className="flex items-center gap-2.5 shrink-0">
-            {/* Notification Bell Icon: shown ONLY when signed in */}
-            {authUser && (
-              <NotificationBell
-                userId={authUser.id}
-                isStaff={isStaff}
-                interfaceLocale={currentInterfaceLocale}
-                onNavigateTab={setActiveTab}
-                onOpenAdminNotifications={() => openAdmin('notifications')}
-              />
-            )}
-
-            {/* Compact Display Language Switcher (interfaceLocale only) */}
-            <div
-              className="inline-flex items-center rounded-xl border border-slate-200 bg-slate-50 p-0.5"
-              role="group"
-              aria-label={messages.nav.languageSwitchLabel}
-            >
-              <Globe
-                className="w-3.5 h-3.5 text-slate-400 mx-1.5 hidden sm:block"
-                aria-hidden="true"
-              />
-              {(uiLocales.length > 0
-                ? uiLocales
-                : [
-                    { locale: 'vi', nativeName: 'Tiếng Việt' },
-                    { locale: 'en', nativeName: 'English' },
-                  ]
-              ).map((loc) => {
-                const isSelected = currentInterfaceLocale === loc.locale;
-                return (
-                  <button
-                    key={loc.locale}
-                    type="button"
-                    onClick={() =>
-                      void handleUpdatePreferences({
-                        interfaceLocale: loc.locale,
-                      })
-                    }
-                    title={loc.nativeName}
-                    aria-pressed={isSelected}
-                    className={`px-2 py-1.5 min-h-[32px] rounded-lg text-xs font-semibold uppercase tracking-wide transition-colors cursor-pointer ${
-                      isSelected
-                        ? 'bg-white text-slate-900 shadow-xs'
-                        : 'text-slate-500 hover:text-slate-800'
-                    }`}
-                  >
-                    {loc.locale}
-                  </button>
-                );
-              })}
-            </div>
-
+      {/* Top Bar — 3-Zone Contract: Brand Wordmark | Single-line Nav | Settings Gear + Primary Action */}
+      {!isFocusStage && (
+        <header className="sticky top-0 z-20 bg-white/95 dark:bg-[#0B1120]/90 backdrop-blur border-b border-slate-200 dark:border-slate-800 transition-colors">
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4 sm:gap-6">
             <button
               type="button"
-              onClick={scrollToLessonStage}
-              className="px-4 py-2 min-h-[40px] rounded-xl bg-sky-600 text-white text-sm font-semibold hover:bg-sky-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              onClick={leaveAdminToHome}
+              aria-label="TM-Lingo"
+              className="inline-flex items-center shrink-0 cursor-pointer hover:opacity-90 transition-opacity"
             >
-              {messages.nav.startLesson}
+              <BrandLogo size="md" />
             </button>
+
+            {/* Zone 2: Navigation */}
+            {hasAuthenticatedWorkspace ? (
+              <nav
+                aria-label="Primary navigation"
+                className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-400"
+              >
+                {navItems.map(([tabKey, label]) => {
+                  const isActive = activeTab === tabKey;
+                  return (
+                    <button
+                      key={tabKey}
+                      type="button"
+                      onClick={() => navigateTab(tabKey)}
+                      className={`py-1 whitespace-nowrap shrink-0 border-b-2 transition-colors cursor-pointer ${
+                        isActive
+                          ? 'border-accent-active text-slate-900 dark:text-white font-semibold'
+                          : 'border-transparent hover:text-slate-900 dark:hover:text-slate-100 hover:border-slate-300 dark:hover:border-slate-700'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </nav>
+            ) : isGuestLanding ? (
+              <nav
+                aria-label={isVi ? 'Điều hướng giới thiệu' : 'Overview navigation'}
+                className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-600 dark:text-slate-400"
+              >
+                <button
+                  type="button"
+                  onClick={() => scrollToLandingSection('pathways')}
+                  className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  {isVi ? 'Lộ trình theo tuổi' : 'Age pathways'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => scrollToLandingSection('method')}
+                  className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  {isVi ? 'Phương pháp' : 'Method'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => scrollToLandingSection('start')}
+                  className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  {isVi ? 'Bắt đầu' : 'Get started'}
+                </button>
+              </nav>
+            ) : (
+              <div className="hidden md:block text-xs font-medium text-slate-500 dark:text-slate-400">
+                {isOnboarding
+                  ? isVi
+                    ? 'Thiết lập hồ sơ học viên đầu tiên'
+                    : 'Set up your first learner profile'
+                  : ''}
+              </div>
+            )}
+
+            {/* Zone 3: Right Actions — [Primary CTA] -> [Notification Slideover] -> [Settings Slideover (always rightmost)] */}
+            <div className="flex items-center gap-2 shrink-0">
+              {!parentUser && activeTab !== 'admin' ? (
+                <button
+                  type="button"
+                  onClick={() => openAuthModal('signup')}
+                  className="inline-flex items-center px-3 sm:px-4 py-2 min-h-[40px] rounded-xl btn-accent text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  {isVi ? 'Tạo tài khoản' : 'Create account'}
+                </button>
+              ) : hasAuthenticatedWorkspace ? (
+                <button
+                  type="button"
+                  onClick={scrollToLessonStage}
+                  className="inline-flex items-center px-3 sm:px-4 py-2 min-h-[40px] rounded-xl btn-accent text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  {messages.nav.startLesson}
+                </button>
+              ) : null}
+
+              {signedInActorId && (
+                <NotificationBell
+                  userId={signedInActorId}
+                  interfaceLocale={currentInterfaceLocale}
+                  onNavigateTab={navigateTab}
+                />
+              )}
+
+              <button
+                type="button"
+                onClick={() => setSettingsOpen(true)}
+                aria-label={
+                  isVi
+                    ? 'Mở cài đặt giao diện, ngôn ngữ và màu sắc'
+                    : 'Open appearance, language and color settings'
+                }
+                title={isVi ? 'Cài đặt ứng dụng' : 'App settings'}
+                className="inline-flex items-center justify-center w-10 h-10 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white transition-colors shrink-0 cursor-pointer"
+              >
+                <Settings className="w-[18px] h-[18px]" aria-hidden="true" />
+              </button>
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
+      )}
 
       <main className="flex-1 max-w-[1200px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-10">
-        {loading ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center text-slate-500">
-            Loading TM-Lingo...
-          </div>
-        ) : error || !activeLearner ? (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-8 space-y-3">
-            <p className="font-semibold text-amber-900">
-              {error ?? 'No learner profile available'}
+        {activeTab === 'admin' ? (
+          staffUser ? (
+            <AdminWorkspace
+              staffUser={staffUser}
+              iamMode={iamMode}
+              interfaceLocale={currentInterfaceLocale}
+              activeLearningLocale={
+                activeLearner?.preferences.learningLocale ?? 'en'
+              }
+              initialSection="overview"
+              languages={languages}
+              ageGroups={ageGroups}
+              mediaAssets={mediaAssets}
+              storageSummary={storageSummary}
+              messages={messages}
+              onUploadMedia={handleUploadMedia}
+              onDeleteMedia={handleDeleteMedia}
+              onRestoreMedia={handleRestoreMedia}
+              onReloadMedia={loadAdminMedia}
+              onStaffSignOut={handleStaffSignOut}
+              onContentPublished={() => void loadPublishedPackages()}
+              onLanguagesUpdated={() => void loadLanguages()}
+              onAgeGroupsUpdated={() => void loadAgeGroups()}
+            />
+          ) : (
+            <AdminLoginView
+              staffBusy={staffBusy}
+              staffError={staffError}
+              iamMode={iamMode}
+              interfaceLocale={currentInterfaceLocale}
+              onStaffLogin={handleStaffLogin}
+              onBackToLearn={leaveAdminToHome}
+            />
+          )
+        ) : !parentUser ? (
+          /* State 1: Unauthenticated Visitor — Clean App Introduction ONLY (Zero Demo Data) */
+          <LandingHomepage
+            interfaceLocale={currentInterfaceLocale}
+            ageGroups={ageGroups}
+            onCreateAccount={(band) => openAuthModal('signup', band)}
+            onSignIn={() => openAuthModal('signin')}
+          />
+        ) : loading ? (
+          <AppLoadingScreen
+            compact
+            subtitle={
+              isVi
+                ? 'Đang tải hồ sơ và lộ trình học phù hợp...'
+                : 'Loading your profile and tailored lessons...'
+            }
+          />
+        ) : error ? (
+          <div className="rounded-2xl border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/40 p-8 space-y-3">
+            <p className="font-semibold text-amber-900 dark:text-amber-200">
+              {error}
             </p>
             <button
               type="button"
               onClick={() => void loadBootstrapData()}
-              className="px-4 py-2 rounded-xl bg-slate-900 text-white text-sm font-semibold cursor-pointer"
+              className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-sm font-semibold cursor-pointer"
             >
-              Retry
+              {isVi ? 'Thử lại' : 'Retry'}
             </button>
           </div>
+        ) : !activeLearner ? (
+          /* State 2: Signed-in New Account — Guided Age & Profile Onboarding */
+          <LearnerOnboardingFlow
+            interfaceLocale={currentInterfaceLocale}
+            ageGroups={ageGroups}
+            languages={languages}
+            initialAgeBand={pendingPreferredAgeBand}
+            parentEmail={parentUser.email}
+            onComplete={async (payload) => {
+              await handleCreateLearner(payload);
+              setPendingPreferredAgeBand(null);
+            }}
+          />
         ) : (
+          /* State 3: Authenticated Workspace with Age-Matched Curriculum */
           <>
-            {activeTab === 'learn' && (
-              <>
-                <section className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
-                  <div className="lg:col-span-7 flex flex-col justify-center space-y-5">
-                    <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500">
-                      <span>
-                        {messages.hero.learningMeta}:{' '}
-                        <strong className="text-slate-800">
-                          {getLocaleName(
-                            activeLearner.preferences.learningLocale
-                          )}
-                        </strong>
-                      </span>
-                      <span aria-hidden="true">·</span>
-                      <span>
-                        {messages.hero.explanationMeta}:{' '}
-                        <strong className="text-slate-800">
-                          {getLocaleName(
-                            activeLearner.preferences.explanationLocale
-                          )}
-                        </strong>
-                      </span>
-                      <span aria-hidden="true">·</span>
-                      <span>{messages.hero.ageBand}</span>
-                    </div>
-
-                    <h1 className="text-4xl sm:text-5xl font-bold tracking-tight text-slate-900 leading-[1.12] [text-wrap:balance]">
-                      {messages.hero.greeting}, {activeLearner.nickname}!
-                    </h1>
-
-                    <p className="text-base sm:text-lg text-slate-600 leading-relaxed max-w-xl">
-                      {messages.hero.subtitle}
-                    </p>
-
-                    <div className="flex flex-wrap items-center gap-3 pt-1">
-                      <button
-                        type="button"
-                        onClick={scrollToLessonStage}
-                        className="px-5 py-3 min-h-[46px] rounded-xl bg-sky-600 text-white font-semibold hover:bg-sky-700 transition-colors whitespace-nowrap cursor-pointer"
-                      >
-                        {messages.hero.continueButton}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab('stories')}
-                        className="px-5 py-3 min-h-[46px] rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold hover:bg-slate-50 transition-colors whitespace-nowrap cursor-pointer"
-                      >
-                        {messages.hero.openStoryButton}
-                      </button>
-                      <PWAInstallButton
-                        locale={activeLearner.preferences.interfaceLocale}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="lg:col-span-5">
-                    <div className="h-full min-h-[240px] rounded-2xl overflow-hidden border border-slate-200 bg-white">
-                      <AssetImage
-                        assetRef="img-story-fruit-market"
-                        altOverride="Fruit Market learning theme illustration"
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                  </div>
-                </section>
-
-                <div id="lesson-stage" className="scroll-mt-24">
-                  <LessonPlayer
-                    learner={activeLearner}
-                    mode={experienceMode}
-                    messages={messages}
-                    onModeChange={setExperienceMode}
-                    onOpenStory={() => setActiveTab('stories')}
-                    onProgressUpdated={() =>
-                      void refreshProgress(activeLearner.id)
-                    }
-                  />
+            {(activeTab === 'learn' || activeTab === 'stories') &&
+            isDailyLimitReached ? (
+              <section className="max-w-xl mx-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-8 sm:p-10 text-center space-y-5">
+                <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-amber-50 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400">
+                  <Sun className="w-8 h-8" aria-hidden="true" />
                 </div>
-              </>
-            )}
+                <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-slate-50">
+                  {currentInterfaceLocale === 'vi'
+                    ? `Hôm nay ${activeLearner.nickname} đã học thật giỏi rồi!`
+                    : `Great learning today, ${activeLearner.nickname}!`}
+                </h2>
+                <p className="text-base text-slate-600 dark:text-slate-300 leading-relaxed">
+                  {currentInterfaceLocale === 'vi'
+                    ? `Học viên đã hoàn thành đủ ${dailyLimitMinutes} phút học hôm nay. Hãy cho đôi mắt nghỉ ngơi, uống nước hoặc thư giãn một chút nhé.`
+                    : `You reached today's gentle ${dailyLimitMinutes}-minute learning goal. Time to rest your eyes, stretch, and recharge!`}
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setExtraMinutesGranted((m) => m + 5)}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 min-h-[44px] rounded-xl btn-accent text-sm font-semibold cursor-pointer"
+                  >
+                    <Clock className="w-4 h-4" aria-hidden="true" />
+                    <span>
+                      {currentInterfaceLocale === 'vi'
+                        ? 'Phụ huynh: Thêm 5 phút nữa'
+                        : 'Parent: Allow 5 more minutes'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('parents')}
+                    className="px-5 py-2.5 min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer"
+                  >
+                    {currentInterfaceLocale === 'vi'
+                      ? 'Điều chỉnh giới hạn'
+                      : 'Adjust daily limit'}
+                  </button>
+                </div>
+              </section>
+            ) : (
+              <>
+                {activeTab === 'learn' && (
+                  <>
+                    {/* Quick Learner Switcher & Sticker Book Toolbar */}
+                    {!isFocusStage && (
+                      <section
+                        aria-label={
+                          isVi
+                            ? 'Thanh chọn hồ sơ học sinh'
+                            : 'Learner switcher bar'
+                        }
+                        className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3 flex flex-wrap items-center justify-between gap-3"
+                      >
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                            <User
+                              className="w-3.5 h-3.5 text-accent"
+                              aria-hidden="true"
+                            />
+                            <span>{isVi ? 'Đang học:' : 'Learner:'}</span>
+                          </span>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {learners.map((profile) => {
+                              const selected = profile.id === activeLearner.id;
+                              const gradeTag =
+                                profile.gradeLevel && profile.gradeLevel > 0
+                                  ? isVi
+                                    ? `Lớp ${profile.gradeLevel}`
+                                    : `G${profile.gradeLevel}`
+                                  : isVi
+                                    ? `${profile.ageYears}t`
+                                    : `${profile.ageYears}y`;
+                              return (
+                                <button
+                                  key={profile.id}
+                                  type="button"
+                                  onClick={() => setActiveLearnerId(profile.id)}
+                                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-colors cursor-pointer ${
+                                    selected
+                                      ? 'border-accent bg-accent-soft'
+                                      : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                                  }`}
+                                >
+                                  <span>{profile.nickname}</span>
+                                  <span className="text-[11px] opacity-75 tabular-nums">
+                                    · {gradeTag}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
 
-            {activeTab === 'stories' && (
-              <StoryReader
-                learner={activeLearner}
-                languages={languages}
-                messages={messages}
-              />
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          {activeAgeGroup && (
+                            <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                              <GraduationCap
+                                className="w-3.5 h-3.5 text-accent"
+                                aria-hidden="true"
+                              />
+                              <span>
+                                {isVi
+                                  ? activeAgeGroup.shortLabels.vi
+                                  : activeAgeGroup.shortLabels.en}
+                              </span>
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setStickerBookOpen(true)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-amber-200 dark:border-amber-800/70 bg-amber-50 dark:bg-amber-950/50 text-xs font-semibold text-amber-900 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/50 cursor-pointer"
+                          >
+                            <Award
+                              className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400"
+                              aria-hidden="true"
+                            />
+                            <span>
+                              {isVi ? 'Sổ Sticker' : 'Sticker Book'} (
+                              {todayRewards?.unlockedStickerIds.length ?? 1})
+                            </span>
+                          </button>
+                        </div>
+                      </section>
+                    )}
+
+                    {/* Personalized Hero Section */}
+                    {!isFocusStage && (
+                      <section className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
+                        <div className="lg:col-span-7 flex flex-col justify-center space-y-5">
+                          <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400 tabular-nums">
+                            <span>
+                              {messages.hero.learningMeta}:{' '}
+                              <strong className="text-slate-800 dark:text-slate-100">
+                                {getLocaleName(
+                                  activeLearner.preferences.learningLocale
+                                )}
+                              </strong>
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span>
+                              {messages.hero.explanationMeta}:{' '}
+                              <strong className="text-slate-800 dark:text-slate-100">
+                                {getLocaleName(
+                                  activeLearner.preferences.explanationLocale
+                                )}
+                              </strong>
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span>
+                              {activeAgeGroup
+                                ? isVi
+                                  ? activeAgeGroup.shortLabels.vi
+                                  : activeAgeGroup.shortLabels.en
+                                : messages.hero.ageBand}
+                            </span>
+                            <span aria-hidden="true">·</span>
+                            <span>
+                              {dailyUsedMinutes}/{dailyLimitMinutes}{' '}
+                              {messages.parent.minutesUnit}
+                            </span>
+                          </div>
+
+                          <h1 className="text-4xl sm:text-5xl font-bold tracking-tight text-slate-900 dark:text-slate-50 leading-[1.12] [text-wrap:balance]">
+                            {messages.hero.greeting}, {activeLearner.nickname}!
+                          </h1>
+
+                          <p className="text-base sm:text-lg text-slate-600 dark:text-slate-300 leading-relaxed max-w-xl">
+                            {activeAgeGroup
+                              ? isVi
+                                ? activeAgeGroup.descriptions.vi
+                                : activeAgeGroup.descriptions.en
+                              : messages.hero.subtitle}
+                          </p>
+
+                          <div className="flex flex-wrap items-center gap-3 pt-1">
+                            <button
+                              type="button"
+                              onClick={scrollToLessonStage}
+                              className="px-5 py-3 min-h-[46px] rounded-xl btn-accent font-semibold transition-colors whitespace-nowrap cursor-pointer"
+                            >
+                              {messages.hero.continueButton}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => navigateTab('stories')}
+                              className="px-5 py-3 min-h-[46px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap cursor-pointer"
+                            >
+                              {messages.hero.openStoryButton}
+                            </button>
+                            <PWAInstallButton
+                              locale={activeLearner.preferences.interfaceLocale}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="lg:col-span-5">
+                          <div className="h-full min-h-[240px] rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+                            <AssetImage
+                              assetRef={getPackageCoverRef(
+                                activePackageId,
+                                packages.find((p) => p.id === activePackageId)
+                                  ?.topicId
+                              )}
+                              altOverride={
+                                packages.find((p) => p.id === activePackageId)
+                                  ?.titles[currentInterfaceLocale] ??
+                                'TM-Lingo learning theme illustration'
+                              }
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                        </div>
+                      </section>
+                    )}
+
+                    {/* Daily Routine Card */}
+                    {!isFocusStage && (
+                      <section
+                        aria-label={
+                          isVi
+                            ? 'Lộ trình học mỗi ngày'
+                            : 'Daily learning routine'
+                        }
+                        className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                      >
+                        <div className="space-y-1">
+                          <p className="text-xs font-semibold text-accent inline-flex items-center gap-1.5">
+                            <Sparkles
+                              className="w-3.5 h-3.5"
+                              aria-hidden="true"
+                            />
+                            <span>
+                              {isVi
+                                ? `Lộ trình ${activeAgeGroup?.uiProfile.defaultDailyMinutes ?? 10} phút hôm nay`
+                                : `Today's ${activeAgeGroup?.uiProfile.defaultDailyMinutes ?? 10}-Minute Routine`}
+                            </span>
+                          </p>
+                          <p className="text-sm text-slate-600 dark:text-slate-300">
+                            {isVi
+                              ? 'Hoàn thành 1 bài từ vựng đúng độ tuổi và nghe 1 truyện song ngữ để giữ nhịp học đều đặn.'
+                              : 'Complete 1 age-matched vocabulary lesson and enjoy 1 story to build a steady daily habit.'}
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={scrollToLessonStage}
+                            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border text-xs font-semibold cursor-pointer transition-colors ${
+                              completedLessonToday
+                                ? 'border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-900 dark:text-emerald-200'
+                                : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 text-slate-800 dark:text-slate-200 hover:border-accent'
+                            }`}
+                          >
+                            {completedLessonToday ? (
+                              <Check
+                                className="w-4 h-4 text-emerald-600 dark:text-emerald-400"
+                                aria-hidden="true"
+                              />
+                            ) : (
+                              <Layers
+                                className="w-4 h-4 text-accent"
+                                aria-hidden="true"
+                              />
+                            )}
+                            <span>
+                              {isVi
+                                ? '1. Học từ vựng'
+                                : '1. Vocabulary lesson'}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => navigateTab('stories')}
+                            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border text-xs font-semibold cursor-pointer transition-colors ${
+                              completedStoryToday
+                                ? 'border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-900 dark:text-emerald-200'
+                                : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 text-slate-800 dark:text-slate-200 hover:border-accent'
+                            }`}
+                          >
+                            {completedStoryToday ? (
+                              <Check
+                                className="w-4 h-4 text-emerald-600 dark:text-emerald-400"
+                                aria-hidden="true"
+                              />
+                            ) : (
+                              <BookOpen
+                                className="w-4 h-4 text-accent"
+                                aria-hidden="true"
+                              />
+                            )}
+                            <span>
+                              {isVi ? '2. Đọc 1 truyện' : '2. Read 1 story'}
+                            </span>
+                          </button>
+                        </div>
+                      </section>
+                    )}
+
+                    {/* Learning Package Shelf (Auto-matched to learner ageBand) */}
+                    {!isFocusStage && packages.length > 0 && (
+                      <section
+                        aria-label={
+                          isVi ? 'Chủ đề bài học' : 'Learning topics'
+                        }
+                        className="space-y-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100 inline-flex items-center gap-2">
+                            <Layers
+                              className="w-4 h-4 text-accent"
+                              aria-hidden="true"
+                            />
+                            <span>
+                              {isVi
+                                ? 'Bài học phù hợp lứa tuổi'
+                                : 'Age-matched learning topics'}
+                            </span>
+                          </h2>
+                          <div className="flex flex-wrap items-center gap-2">
+                            {ageGroups.length > 0 && (
+                              <select
+                                value={packageAgeFilter}
+                                onChange={(e) =>
+                                  setPackageAgeFilter(e.target.value)
+                                }
+                                aria-label={
+                                  isVi
+                                    ? 'Lọc gói bài học theo nhóm tuổi'
+                                    : 'Filter packages by age group'
+                                }
+                                className="min-h-[34px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 text-xs font-semibold text-slate-700 dark:text-slate-200"
+                              >
+                                <option value="all">
+                                  {isVi ? 'Mọi nhóm tuổi' : 'All age groups'} (
+                                  {packages.length})
+                                </option>
+                                {ageGroups.map((g) => (
+                                  <option key={g.id} value={g.id}>
+                                    {isVi
+                                      ? g.shortLabels.vi
+                                      : g.shortLabels.en}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {(filteredPackages.length > 0
+                            ? filteredPackages
+                            : packages
+                          ).map((pkg) => {
+                            const selected = pkg.id === activePackageId;
+                            const pkgTitle =
+                              pkg.titles[currentInterfaceLocale] ||
+                              pkg.titles.en ||
+                              Object.values(pkg.titles)[0] ||
+                              pkg.id;
+                            const pkgSummary =
+                              pkg.summaries[currentInterfaceLocale] ||
+                              pkg.summaries.vi ||
+                              Object.values(pkg.summaries)[0] ||
+                              '';
+                            return (
+                              <button
+                                key={pkg.id}
+                                type="button"
+                                onClick={() => setActivePackageId(pkg.id)}
+                                aria-pressed={selected}
+                                className={`group text-left rounded-2xl border p-3 flex items-center gap-3.5 transition-colors cursor-pointer ${
+                                  selected
+                                    ? 'border-accent bg-accent-soft'
+                                    : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-accent'
+                                }`}
+                              >
+                                <div className="w-20 h-16 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 shrink-0">
+                                  <AssetImage
+                                    assetRef={getPackageCoverRef(
+                                      pkg.id,
+                                      pkg.topicId
+                                    )}
+                                    altOverride={pkgTitle}
+                                    className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform"
+                                  />
+                                </div>
+                                <div className="min-w-0 flex-1 space-y-0.5">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
+                                      {pkgTitle}
+                                    </p>
+                                    {selected && (
+                                      <Check
+                                        className="w-4 h-4 text-accent shrink-0"
+                                        aria-hidden="true"
+                                      />
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2">
+                                    {pkgSummary}
+                                  </p>
+                                  <p className="text-[11px] font-medium text-slate-400 dark:text-slate-500 tabular-nums pt-0.5">
+                                    {pkg.conceptCount}{' '}
+                                    {isVi ? 'từ vựng' : 'words'} ·{' '}
+                                    {pkg.ageBand.join(', ')}
+                                  </p>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </section>
+                    )}
+
+                    <div id="lesson-stage" className="scroll-mt-24">
+                      <LessonPlayer
+                        learner={activeLearner}
+                        activeAgeGroup={activeAgeGroup}
+                        packages={packages}
+                        activePackageId={activePackageId}
+                        onSelectPackage={setActivePackageId}
+                        mode={experienceMode}
+                        messages={messages}
+                        focusMode={kidFocusMode}
+                        onToggleFocusMode={() => setKidFocusMode((v) => !v)}
+                        onOpenStickerBook={() => setStickerBookOpen(true)}
+                        onModeChange={setExperienceMode}
+                        onOpenStory={() => navigateTab('stories')}
+                        onProgressUpdated={() =>
+                          void refreshProgress(activeLearner.id)
+                        }
+                      />
+                    </div>
+                  </>
+                )}
+
+                {activeTab === 'stories' && (
+                  <StoryReader
+                    learner={activeLearner}
+                    ageGroups={ageGroups}
+                    languages={languages}
+                    messages={messages}
+                    onOpenPackage={openPackageFromStory}
+                  />
+                )}
+              </>
             )}
 
             {activeTab === 'parents' && (
               <ParentPanel
-                authUser={authUser}
-                authBusy={authBusy}
-                authError={authError}
-                authNotice={authNotice}
-                onSignInGoogle={handleSignInGoogle}
-                onSignInEmail={handleSignInEmail}
-                onSignUpEmail={handleSignUpEmail}
-                onSignOut={handleSignOut}
-                onOpenAdmin={() => openAdmin('notifications')}
+                authUser={parentUser}
+                authBusy={parentAuthBusy}
+                authError={parentAuthError}
+                authNotice={parentAuthNotice}
+                onSignInGoogle={handleParentSignInGoogle}
+                onSignInEmail={handleParentSignInEmail}
+                onSignUpEmail={handleParentSignUpEmail}
+                onSignOut={handleParentSignOut}
                 learners={learners}
                 activeLearner={activeLearner}
+                ageGroups={ageGroups}
                 languages={languages}
                 progressRecords={progressRecords}
                 messages={messages}
                 onSelectLearner={setActiveLearnerId}
                 onCreateLearner={handleCreateLearner}
+                onUpdateLearnerProfile={handleUpdateLearnerProfile}
                 onUpdatePreferences={handleUpdatePreferences}
+                onFamilyDataChanged={loadBootstrapData}
               />
             )}
-
-            {activeTab === 'admin' &&
-              (authUser && isStaff ? (
-                <AdminWorkspace
-                  authUser={authUser}
-                  interfaceLocale={currentInterfaceLocale}
-                  activeLearningLocale={activeLearner.preferences.learningLocale}
-                  initialSection={adminSection}
-                  languages={languages}
-                  mediaAssets={mediaAssets}
-                  messages={messages}
-                  onUploadMedia={handleUploadMedia}
-                  onDeleteMedia={handleDeleteMedia}
-                />
-              ) : (
-                <AdminLoginView
-                  authUser={authUser}
-                  authBusy={authBusy}
-                  authError={authError}
-                  interfaceLocale={currentInterfaceLocale}
-                  onSignInEmail={handleSignInEmail}
-                  onSignOut={handleSignOut}
-                  onBackToLearn={() => setActiveTab('learn')}
-                />
-              ))}
           </>
         )}
       </main>
 
-      <footer className="border-t border-slate-200 bg-white mt-12">
-        <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500">
-          <span>TM-Lingo · Multilingual Early Language Learning (Ages 3–5)</span>
-          <div className="flex flex-wrap items-center gap-4">
-            <span>
-              Interface: {activeLearner?.preferences.interfaceLocale ?? 'vi'} ·
-              Learning: {activeLearner?.preferences.learningLocale ?? 'en'}
+      {!isFocusStage && (
+        <footer className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0B1120] mt-12 transition-colors">
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400">
+            <span className="inline-flex items-center gap-2">
+              <BrandLogo size="sm" showWordmark={false} />
+              <span>
+                {isVi
+                  ? 'TM-Lingo · Nền tảng học đa ngôn ngữ theo lộ trình (Mầm non – Lớp 12)'
+                  : 'TM-Lingo · Multilingual Learning Platform (Pre-K – Grade 12)'}
+              </span>
             </span>
-            <span aria-hidden="true">·</span>
-            <button
-              type="button"
-              onClick={() => openAdmin('notifications')}
-              className="font-medium text-slate-600 hover:text-sky-700 transition-colors cursor-pointer"
-            >
-              {messages.footer.adminPortal}
-            </button>
+            <div className="flex flex-wrap items-center gap-4">
+              <button
+                type="button"
+                onClick={() => setSettingsOpen(true)}
+                className="font-medium text-slate-600 dark:text-slate-300 hover:text-accent transition-colors cursor-pointer"
+              >
+                {isVi ? 'Cài đặt giao diện' : 'Appearance & Language'}
+              </button>
+            </div>
           </div>
-        </div>
-      </footer>
+        </footer>
+      )}
+
+      {/* Thumb-friendly Mobile Bottom Navigation (Authenticated Workspace Only) */}
+      {hasAuthenticatedWorkspace && !isFocusStage && (
+        <nav
+          aria-label={isVi ? 'Điều hướng di động' : 'Mobile navigation'}
+          className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 dark:bg-slate-950/95 backdrop-blur border-t border-slate-200 dark:border-slate-800 h-16 px-2 grid"
+          style={{
+            gridTemplateColumns: `repeat(${navItems.length}, minmax(0, 1fr))`,
+          }}
+        >
+          {navItems.map(([tabKey, label]) => {
+            const isActive = activeTab === tabKey;
+            const Icon =
+              tabKey === 'learn'
+                ? Layers
+                : tabKey === 'stories'
+                  ? BookOpen
+                  : Users;
+            return (
+              <button
+                key={tabKey}
+                type="button"
+                onClick={() => navigateTab(tabKey)}
+                className={`flex flex-col items-center justify-center gap-1 text-[11px] font-semibold transition-colors cursor-pointer ${
+                  isActive
+                    ? 'text-accent'
+                    : 'text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                <Icon className="w-5 h-5" aria-hidden="true" />
+                <span className="truncate max-w-full px-1">{label}</span>
+              </button>
+            );
+          })}
+        </nav>
+      )}
+
+      {/* Settings Slideover (Dark Mode, Accent Colors, Language, Audio, Reduced Motion) */}
+      <SettingsSlideover
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        interfaceLocale={currentInterfaceLocale}
+        uiLocales={uiLocales}
+        appearance={appearance}
+        onChangeThemeMode={handleChangeThemeMode}
+        onChangeAccentColor={handleChangeAccentColor}
+        onChangeReducedMotion={handleChangeReducedMotion}
+        onChangeInterfaceLocale={handleChangeInterfaceLocale}
+        parentUser={parentUser}
+        onOpenAuth={(mode) => openAuthModal(mode)}
+        onSignOut={() => void handleParentSignOut()}
+      />
+
+      {/* Account Sign Up / Sign In Modal */}
+      <AccountAuthModal
+        open={authModalOpen}
+        initialMode={authModalMode}
+        interfaceLocale={currentInterfaceLocale}
+        busy={parentAuthBusy}
+        error={parentAuthError}
+        notice={parentAuthNotice}
+        onClose={() => setAuthModalOpen(false)}
+        onSignInGoogle={handleParentSignInGoogle}
+        onSignInEmail={handleParentSignInEmail}
+        onSignUpEmail={handleParentSignUpEmail}
+      />
+
+      {/* Sticker Book Modal */}
+      {stickerBookOpen && activeLearner && (
+        <StickerBookModal
+          learnerId={activeLearner.id}
+          learnerName={activeLearner.nickname}
+          isVi={isVi}
+          onClose={() => setStickerBookOpen(false)}
+        />
+      )}
+
+      {/* Parental Gate Modal */}
+      {parentGateOpen && (
+        <ParentalGateModal
+          isVi={isVi}
+          onUnlocked={() => {
+            setParentGateUnlockedSession(true);
+            setParentGateOpen(false);
+            setActiveTab('parents');
+          }}
+          onCancel={() => setParentGateOpen(false)}
+        />
+      )}
 
       <OfflineIndicator
-        locale={activeLearner?.preferences.interfaceLocale ?? 'vi'}
+        locale={currentInterfaceLocale}
+        lastSyncedCount={lastSyncedCount}
       />
     </div>
   );
