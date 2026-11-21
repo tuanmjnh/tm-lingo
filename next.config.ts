@@ -18,6 +18,21 @@ const nextConfig: NextConfig = {
     ],
   },
   env: {
+    NEXT_PUBLIC_HUB_URL:
+      process.env.NEXT_PUBLIC_HUB_URL ||
+      process.env.VITE_PUBLIC_HUB_URL ||
+      process.env.HUB_BASE_URL ||
+      process.env.HUB_URL ||
+      '',
+    NEXT_PUBLIC_HUB_APP_ID:
+      process.env.NEXT_PUBLIC_HUB_APP_ID ||
+      process.env.VITE_PUBLIC_HUB_APP_ID ||
+      process.env.HUB_APP_ID ||
+      'tm-lingo',
+    NEXT_PUBLIC_AUTH_PROVIDER:
+      process.env.NEXT_PUBLIC_AUTH_PROVIDER ||
+      process.env.AUTH_PROVIDER ||
+      'hub',
     NEXT_PUBLIC_FIREBASE_VAPID_KEY:
       process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY ||
       process.env.VITE_FIREBASE_VAPID_KEY ||

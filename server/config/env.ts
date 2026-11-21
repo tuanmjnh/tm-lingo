@@ -51,11 +51,13 @@ const serverEnvSchema = z.object({
   AI_CONFIG_SECRET: z.string().default(''),
 
   // TM-Hub Control Plane (Staff IAM, RBAC, Users, Audit Logs)
+  AUTH_PROVIDER: z.string().default('hub'),
   HUB_BASE_URL: z.string().default(''),
   HUB_APP_ID: z.string().default('tm-lingo'),
   HUB_DEVICE_ID: z.string().default(''),
   HUB_DEVICE_SECRET: z.string().default(''),
   HUB_APP_SECRET: z.string().default(''),
+  AUTH_JWT_SECRET: z.string().default(''),
 
   // Local dev staff fallback (only used when HUB_BASE_URL is not configured)
   SEED_ROOT_EMAIL: z.string().default('root@tm-lingo.app'),
@@ -90,6 +92,32 @@ const serverEnvSchema = z.object({
 
 const rawEnv = {
   ...process.env,
+  AUTH_PROVIDER:
+    process.env.AUTH_PROVIDER ||
+    process.env.NEXT_PUBLIC_AUTH_PROVIDER ||
+    'hub',
+  HUB_BASE_URL:
+    process.env.HUB_BASE_URL ||
+    process.env.HUB_URL ||
+    process.env.VITE_PUBLIC_HUB_URL ||
+    process.env.NEXT_PUBLIC_HUB_URL ||
+    process.env.NUXT_PUBLIC_HUB_URL ||
+    '',
+  HUB_APP_ID:
+    process.env.HUB_APP_ID ||
+    process.env.VITE_PUBLIC_HUB_APP_ID ||
+    process.env.NEXT_PUBLIC_HUB_APP_ID ||
+    process.env.NUXT_PUBLIC_HUB_APP_ID ||
+    process.env.APP_ID ||
+    'tm-lingo',
+  HUB_APP_SECRET:
+    process.env.HUB_APP_SECRET ||
+    process.env.VITE_HUB_APP_SECRET ||
+    process.env.NUXT_HUB_APP_SECRET ||
+    '',
+  AUTH_JWT_SECRET:
+    process.env.AUTH_JWT_SECRET ||
+    '',
   NEXT_PUBLIC_FIREBASE_VAPID_KEY:
     process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY ||
     process.env.VITE_FIREBASE_VAPID_KEY ||
@@ -132,6 +160,9 @@ export function getMasterEncryptionKey(): Uint8Array {
 }
 
 export function isTmHubConfigured(): boolean {
+  if (env.AUTH_PROVIDER && env.AUTH_PROVIDER !== 'hub') {
+    return false;
+  }
   return Boolean(env.HUB_BASE_URL.trim());
 }
 
@@ -146,7 +177,7 @@ export function getRuntimeEnvironmentSummary(mongoStatus?: {
   const firebaseConfigured = fs.existsSync(firebaseConfigPath);
   const has = (val: string) => Boolean(val && val.trim().length > 0);
   const mongodbConfigured = has(env.MONGODB_URI);
-  const tmHubConfigured = has(env.HUB_BASE_URL);
+  const tmHubConfigured = isTmHubConfigured();
   const objectStorageConfigured =
     has(env.OBJECT_STORAGE_ENDPOINT) &&
     has(env.OBJECT_STORAGE_BUCKET) &&
@@ -174,8 +205,12 @@ export function getRuntimeEnvironmentSummary(mongoStatus?: {
       mongodbConfigured,
       mongodbConnected: mongoStatus?.connected ?? false,
       firebaseConfigured,
+      authProvider: env.AUTH_PROVIDER,
       tmHubConfigured,
+      hubBaseUrl: env.HUB_BASE_URL,
       hubAppId: env.HUB_APP_ID,
+      hubAppSecretConfigured: has(env.HUB_APP_SECRET),
+      authJwtSecretConfigured: has(env.AUTH_JWT_SECRET),
       aiConfigSecretConfigured: has(env.AI_CONFIG_SECRET),
       webPushConfigured: has(env.VAPID_PUBLIC_KEY) && has(env.VAPID_PRIVATE_KEY),
       geminiConfigured: has(env.GEMINI_API_KEY),
@@ -189,10 +224,12 @@ export function getRuntimeEnvironmentSummary(mongoStatus?: {
     configuredKeys: {
       APP_BASE_URL: has(env.APP_BASE_URL),
       FIREBASE_APPLET_CONFIG: firebaseConfigured,
+      AUTH_PROVIDER: has(env.AUTH_PROVIDER),
       HUB_BASE_URL: tmHubConfigured,
       HUB_APP_ID: has(env.HUB_APP_ID),
       HUB_DEVICE_CREDENTIAL: has(env.HUB_DEVICE_ID) && has(env.HUB_DEVICE_SECRET),
       HUB_APP_SECRET: has(env.HUB_APP_SECRET),
+      AUTH_JWT_SECRET: has(env.AUTH_JWT_SECRET),
       AI_CONFIG_SECRET: has(env.AI_CONFIG_SECRET),
       VAPID_SUBJECT: has(env.VAPID_SUBJECT),
       VAPID_PUBLIC_KEY: has(env.VAPID_PUBLIC_KEY),

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
+    "dev:port": "next dev -p 5001",
     "build": "next build",
     "start": "next start",
     "lint": "tsc --noEmit"

@@ -51,7 +51,9 @@ const TEACHER_CAPABILITIES = [
 
 function getLocalSigningSecret(): Uint8Array {
   return new TextEncoder().encode(
-    env.SESSION_SECRET.trim() || 'tm-lingo-local-dev-session-secret'
+    env.AUTH_JWT_SECRET.trim() ||
+      env.SESSION_SECRET.trim() ||
+      'tm-lingo-local-dev-session-secret'
   );
 }
 
@@ -355,14 +357,25 @@ async function resolveHubStaffFromToken(
 ): Promise<AuthUserProfile | null> {
   const hub = createServerHubClient({ accessToken });
 
-  // Fast path: verify RS256 via TM-Hub JWKS if available, then enrich permissions
-  let verifiedByJwks = false;
+  // Cryptographic verification: RS256 via TM-Hub JWKS first, fallback to HS256 with AUTH_JWT_SECRET
+  let verified = false;
+  let verifiedClaims: Record<string, unknown> | null = null;
   try {
     const jwks = await getHubJwksVerifier();
-    await jwtVerify(accessToken, jwks, { algorithms: ['RS256'] });
-    verifiedByJwks = true;
+    const result = await jwtVerify(accessToken, jwks, { algorithms: ['RS256'] });
+    verified = true;
+    verifiedClaims = result.payload as Record<string, unknown>;
   } catch {
-    verifiedByJwks = false;
+    if (env.AUTH_JWT_SECRET.trim()) {
+      try {
+        const secret = new TextEncoder().encode(env.AUTH_JWT_SECRET.trim());
+        const result = await jwtVerify(accessToken, secret, { algorithms: ['HS256'] });
+        verified = true;
+        verifiedClaims = result.payload as Record<string, unknown>;
+      } catch {
+        verified = false;
+      }
+    }
   }
 
   try {
@@ -370,26 +383,52 @@ async function resolveHubStaffFromToken(
       hub.auth.me(),
       hub.auth.permissions().catch(() => null),
     ]);
-    if (!meRes.success || !meRes.data) return null;
+    if (meRes.success && meRes.data) {
+      const roles = permRes?.data?.roles ?? meRes.data.roles ?? [];
+      const capabilities =
+        permRes?.data?.permissions ?? meRes.data.permissions ?? [];
+      const primaryRole = derivePrimaryStaffRole(roles, capabilities);
 
-    const roles = permRes?.data?.roles ?? meRes.data.roles ?? [];
-    const capabilities =
-      permRes?.data?.permissions ?? meRes.data.permissions ?? [];
-    const primaryRole = derivePrimaryStaffRole(roles, capabilities);
-
-    return {
-      id: meRes.data.id,
-      email: meRes.data.email ?? null,
-      displayName: meRes.data.name ?? meRes.data.email ?? null,
-      role: primaryRole,
-      provider: 'tm-hub',
-      roles,
-      capabilities,
-    };
+      return {
+        id: meRes.data.id,
+        email: meRes.data.email ?? null,
+        displayName: meRes.data.name ?? meRes.data.email ?? null,
+        role: primaryRole,
+        provider: 'tm-hub',
+        roles,
+        capabilities,
+      };
+    }
   } catch {
-    if (!verifiedByJwks) return null;
-    return null;
+    // If hub API is unreachable but token was cryptographically verified
+    if (verified && verifiedClaims && typeof verifiedClaims.sub === 'string') {
+      const roles = Array.isArray(verifiedClaims.roles)
+        ? (verifiedClaims.roles as string[])
+        : [];
+      const capabilities = Array.isArray(verifiedClaims.permissions)
+        ? (verifiedClaims.permissions as string[])
+        : Array.isArray(verifiedClaims.capabilities)
+          ? (verifiedClaims.capabilities as string[])
+          : [];
+      const primaryRole = derivePrimaryStaffRole(roles, capabilities);
+      return {
+        id: verifiedClaims.sub,
+        email: typeof verifiedClaims.email === 'string' ? verifiedClaims.email : null,
+        displayName:
+          typeof verifiedClaims.name === 'string'
+            ? verifiedClaims.name
+            : typeof verifiedClaims.email === 'string'
+              ? verifiedClaims.email
+              : null,
+        role: primaryRole,
+        provider: 'tm-hub',
+        roles,
+        capabilities,
+      };
+    }
   }
+
+  return null;
 }
 
 export async function resolveStaffSessionFromRequest(
