@@ -5,8 +5,11 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   Award,
   BookOpen,
+  Brain,
   Check,
+  ChevronDown,
   Clock,
+  Globe,
   GraduationCap,
   Layers,
   Settings,
@@ -37,9 +40,13 @@ import {
 import { apiClient } from './shared/apiClient';
 import { flushOfflineQueue } from './lib/offlineQueue';
 import {
+  computeGoalStreak,
+  getMasteredWordsList,
   getTodayDateKey,
+  getTrickyWordsForReview,
   isParentalGateEnabled,
   loadLearnerRewards,
+  recordDailyGoalMet,
 } from './lib/learnerRewards';
 import {
   applyAppearanceToDocument,
@@ -53,6 +60,11 @@ import { getUiMessages } from './i18n/messages';
 import { AssetImage } from './components/AssetImage';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
+import { DailyGoalProgressRing } from './components/DailyGoalProgressRing';
+import { DailyGoalCelebrationOverlay } from './components/DailyGoalCelebrationOverlay';
+import { LearningTipOfTheDay } from './components/LearningTipOfTheDay';
+import { SmartWordReviewModal } from './components/SmartWordReviewModal';
+import { playCelebrationFanfare } from './audio/soundEffects';
 import { NotificationBell } from './components/NotificationBell';
 import { StickerBookModal } from './components/StickerBookModal';
 import { ParentalGateModal } from './components/ParentalGateModal';
@@ -158,6 +170,7 @@ export function App({ initialTab = 'learn' }: AppProps) {
 
   // Dual Auth Track 2: Staff Session
   const [staffUser, setStaffUser] = useState<AuthUserProfile | null>(null);
+  const [staffChecking, setStaffChecking] = useState(true);
   const [iamMode, setIamMode] = useState<'tm-hub' | 'local-dev'>('local-dev');
   const [staffBusy, setStaffBusy] = useState(false);
   const [staffError, setStaffError] = useState<string | null>(null);
@@ -188,6 +201,9 @@ export function App({ initialTab = 'learn' }: AppProps) {
   // Interactive UX overlays: Kid Focus Mode, Sticker Book, Parental Gate
   const [kidFocusMode, setKidFocusMode] = useState(false);
   const [stickerBookOpen, setStickerBookOpen] = useState(false);
+  const [wordReviewOpen, setWordReviewOpen] = useState(false);
+  const [goalCelebrationOpen, setGoalCelebrationOpen] = useState(false);
+  const [goalStreakVersion, setGoalStreakVersion] = useState(0);
   const [parentGateOpen, setParentGateOpen] = useState(false);
   const [parentGateUnlockedSession, setParentGateUnlockedSession] =
     useState(false);
@@ -257,6 +273,9 @@ export function App({ initialTab = 'learn' }: AppProps) {
       })
       .catch(() => {
         if (mounted) setStaffUser(null);
+      })
+      .finally(() => {
+        if (mounted) setStaffChecking(false);
       });
 
     return () => {
@@ -490,6 +509,13 @@ export function App({ initialTab = 'learn' }: AppProps) {
   }, [activeLearner?.id, activeLearnerAgeBand, packages]);
 
   const uiLocales = languages.filter((l) => l.enabled && l.uiEnabled);
+  const quickInterfaceLocales =
+    uiLocales.length > 0
+      ? uiLocales
+      : [
+          { locale: 'vi', nativeName: 'Tiếng Việt', displayName: 'Vietnamese' },
+          { locale: 'en', nativeName: 'English', displayName: 'English' },
+        ];
   const currentInterfaceLocale =
     activeLearner?.preferences.interfaceLocale ?? appearance.guestLocale ?? 'vi';
   const messages = getUiMessages(currentInterfaceLocale);
@@ -821,6 +847,41 @@ export function App({ initialTab = 'learn' }: AppProps) {
   const isDailyLimitReached =
     Boolean(activeLearner) && dailyUsedMinutes >= dailyLimitMinutes;
 
+  // Record daily goal completion & trigger celebratory 100% overlay once per learner/day/goal milestone
+  const activeLearnerIdForGoal = activeLearner?.id ?? '';
+  useEffect(() => {
+    if (!activeLearnerIdForGoal || !isDailyLimitReached) return;
+    if (typeof window === 'undefined') return;
+    const todayKey = getTodayDateKey();
+    recordDailyGoalMet(activeLearnerIdForGoal, todayKey);
+    setGoalStreakVersion((v) => v + 1);
+    const milestoneKey = `tm_lingo_goal_celebrated_v1:${activeLearnerIdForGoal}:${todayKey}:${dailyLimitMinutes}`;
+    try {
+      if (window.localStorage.getItem(milestoneKey) === '1') return;
+      window.localStorage.setItem(milestoneKey, '1');
+    } catch {
+      // ignore storage errors
+    }
+    setGoalCelebrationOpen(true);
+    playCelebrationFanfare();
+  }, [activeLearnerIdForGoal, isDailyLimitReached, dailyLimitMinutes]);
+
+  const goalStreakSummary =
+    activeLearner && goalStreakVersion >= 0
+      ? computeGoalStreak(activeLearner.id, {
+          includeToday: isDailyLimitReached,
+        })
+      : null;
+
+  const trickyReviewCount =
+    activeLearner && goalStreakVersion >= 0
+      ? getTrickyWordsForReview(activeLearner.id).length
+      : 0;
+  const masteredReviewCount =
+    activeLearner && goalStreakVersion >= 0
+      ? getMasteredWordsList(activeLearner.id).length
+      : 0;
+
   const navItems: Array<[AppTab, string]> = [
     ['learn', messages.nav.learn],
     ['stories', messages.nav.stories],
@@ -983,6 +1044,15 @@ export function App({ initialTab = 'learn' }: AppProps) {
               onLanguagesUpdated={() => void loadLanguages()}
               onAgeGroupsUpdated={() => void loadAgeGroups()}
             />
+          ) : staffChecking ? (
+            <AppLoadingScreen
+              compact
+              subtitle={
+                isVi
+                  ? 'Đang khôi phục phiên quản trị...'
+                  : 'Restoring admin session...'
+              }
+            />
           ) : (
             <AdminLoginView
               staffBusy={staffBusy}
@@ -1134,6 +1204,13 @@ export function App({ initialTab = 'learn' }: AppProps) {
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2.5">
+                          <DailyGoalProgressRing
+                            dailyUsedMinutes={dailyUsedMinutes}
+                            dailyLimitMinutes={dailyLimitMinutes}
+                            isVi={isVi}
+                            minutesUnit={messages.parent.minutesUnit}
+                            onCelebrationClick={() => setGoalCelebrationOpen(true)}
+                          />
                           {activeAgeGroup && (
                             <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
                               <GraduationCap
@@ -1147,6 +1224,45 @@ export function App({ initialTab = 'learn' }: AppProps) {
                               </span>
                             </span>
                           )}
+                          <div
+                            className="relative inline-flex items-center rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-950 hover:border-slate-300 dark:hover:border-slate-600 transition-colors"
+                            title={
+                              isVi
+                                ? 'Tùy chọn ngôn ngữ giao diện'
+                                : 'Language Preferences'
+                            }
+                          >
+                            <Globe
+                              className="w-3.5 h-3.5 text-accent ml-2.5 shrink-0 pointer-events-none"
+                              aria-hidden="true"
+                            />
+                            <select
+                              aria-label={
+                                isVi
+                                  ? 'Tùy chọn ngôn ngữ'
+                                  : 'Language Preferences'
+                              }
+                              value={currentInterfaceLocale}
+                              onChange={(e) =>
+                                handleChangeInterfaceLocale(e.target.value)
+                              }
+                              className="appearance-none bg-transparent pl-1.5 pr-7 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 focus:outline-none cursor-pointer"
+                            >
+                              {quickInterfaceLocales.map((loc) => (
+                                <option
+                                  key={loc.locale}
+                                  value={loc.locale}
+                                  className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
+                                >
+                                  {loc.nativeName} ({loc.locale.toUpperCase()})
+                                </option>
+                              ))}
+                            </select>
+                            <ChevronDown
+                              className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute right-2 pointer-events-none"
+                              aria-hidden="true"
+                            />
+                          </div>
                           <button
                             type="button"
                             onClick={() => setStickerBookOpen(true)}
@@ -1255,6 +1371,16 @@ export function App({ initialTab = 'learn' }: AppProps) {
                       </section>
                     )}
 
+                    {/* Learning Tip of the Day */}
+                    {!isFocusStage && (
+                      <LearningTipOfTheDay
+                        learnerId={activeLearner.id}
+                        learnerName={activeLearner.nickname}
+                        interfaceLocale={currentInterfaceLocale}
+                        reducedMotion={effectiveReducedMotion}
+                      />
+                    )}
+
                     {/* Daily Routine Card */}
                     {!isFocusStage && (
                       <section
@@ -1334,6 +1460,38 @@ export function App({ initialTab = 'learn' }: AppProps) {
                             )}
                             <span>
                               {isVi ? '2. Đọc 1 truyện' : '2. Read 1 story'}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setWordReviewOpen(true)}
+                            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border text-xs font-semibold cursor-pointer transition-colors ${
+                              trickyReviewCount > 0
+                                ? 'border-amber-200 dark:border-amber-800/70 bg-amber-50 dark:bg-amber-950/50 text-amber-900 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/50'
+                                : masteredReviewCount > 0
+                                  ? 'border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-900 dark:text-emerald-200'
+                                  : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 text-slate-800 dark:text-slate-200 hover:border-accent'
+                            }`}
+                          >
+                            <Brain
+                              className={`w-4 h-4 ${
+                                trickyReviewCount > 0
+                                  ? 'text-amber-600 dark:text-amber-400'
+                                  : masteredReviewCount > 0
+                                    ? 'text-emerald-600 dark:text-emerald-400'
+                                    : 'text-accent'
+                              }`}
+                              aria-hidden="true"
+                            />
+                            <span className="tabular-nums">
+                              {trickyReviewCount > 0
+                                ? isVi
+                                  ? `3. Ôn từ khó (${trickyReviewCount})`
+                                  : `3. Review words (${trickyReviewCount})`
+                                : isVi
+                                  ? '3. Ôn từ khó'
+                                  : '3. Word review'}
                             </span>
                           </button>
                         </div>
@@ -1511,6 +1669,7 @@ export function App({ initialTab = 'learn' }: AppProps) {
                 onUpdateLearnerProfile={handleUpdateLearnerProfile}
                 onUpdatePreferences={handleUpdatePreferences}
                 onFamilyDataChanged={loadBootstrapData}
+                onOpenWordReview={() => setWordReviewOpen(true)}
               />
             )}
           </>
@@ -1607,6 +1766,27 @@ export function App({ initialTab = 'learn' }: AppProps) {
         onSignUpEmail={handleParentSignUpEmail}
       />
 
+      {/* Daily 100% Learning Goal Celebration Overlay */}
+      {activeLearner && (
+        <DailyGoalCelebrationOverlay
+          open={goalCelebrationOpen}
+          learnerName={activeLearner.nickname}
+          dailyUsedMinutes={dailyUsedMinutes}
+          dailyLimitMinutes={dailyLimitMinutes}
+          stickerCount={todayRewards?.unlockedStickerIds.length ?? 1}
+          streakDays={Math.max(1, goalStreakSummary?.currentStreak ?? 1)}
+          longestStreakDays={Math.max(1, goalStreakSummary?.longestStreak ?? 1)}
+          streakLast7Days={goalStreakSummary?.last7Days ?? []}
+          nextStreakMilestone={goalStreakSummary?.nextMilestone ?? 3}
+          isVi={isVi}
+          minutesUnit={messages.parent.minutesUnit}
+          reducedMotion={effectiveReducedMotion}
+          onClose={() => setGoalCelebrationOpen(false)}
+          onOpenStickerBook={() => setStickerBookOpen(true)}
+          onExtendFiveMinutes={() => setExtraMinutesGranted((m) => m + 5)}
+        />
+      )}
+
       {/* Sticker Book Modal */}
       {stickerBookOpen && activeLearner && (
         <StickerBookModal
@@ -1614,6 +1794,21 @@ export function App({ initialTab = 'learn' }: AppProps) {
           learnerName={activeLearner.nickname}
           isVi={isVi}
           onClose={() => setStickerBookOpen(false)}
+        />
+      )}
+
+      {/* Smart Tricky-Words Review Modal */}
+      {activeLearner && (
+        <SmartWordReviewModal
+          open={wordReviewOpen}
+          learnerId={activeLearner.id}
+          learnerName={activeLearner.nickname}
+          defaultLearningLocale={activeLearner.preferences.learningLocale}
+          audioSpeed={activeLearner.preferences.audioSpeed}
+          isVi={isVi}
+          reducedMotion={effectiveReducedMotion}
+          onClose={() => setWordReviewOpen(false)}
+          onReviewChanged={() => setGoalStreakVersion((v) => v + 1)}
         />
       )}
 

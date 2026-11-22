@@ -75,6 +75,30 @@ export async function withParentAuth<TContext = unknown>(
   });
 }
 
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+function passesStaffCsrfCheck(request: NextRequest): boolean {
+  if (!MUTATING_METHODS.has(request.method.toUpperCase())) return true;
+  if (request.headers.get('authorization')?.toLowerCase().startsWith('bearer ')) {
+    return true;
+  }
+  if (request.headers.get('x-requested-with')) {
+    return true;
+  }
+  const origin = request.headers.get('origin');
+  const host =
+    request.headers.get('x-forwarded-host')?.split(',')[0]?.trim() ||
+    request.headers.get('host');
+  if (origin && host) {
+    try {
+      return new URL(origin).host === host;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
 export async function withStaffCapability<TContext = unknown>(
   request: NextRequest,
   context: TContext,
@@ -87,6 +111,10 @@ export async function withStaffCapability<TContext = unknown>(
   }) => Promise<NextResponse>
 ): Promise<NextResponse> {
   await ensureServerInit();
+
+  if (!passesStaffCsrfCheck(request)) {
+    return jsonError('Forbidden: invalid request origin.', 403);
+  }
 
   const session = await resolveStaffSessionFromRequest(request);
   if (!session) {
@@ -107,13 +135,22 @@ export async function withStaffCapability<TContext = unknown>(
     accessToken: session.accessToken,
   });
 
-  // If access token was silently refreshed via TM-Hub, update HttpOnly cookies on response
+  // If access token was silently refreshed via TM-Hub, update HttpOnly cookies and notify in-memory client
   if (session.refreshedTokens) {
-    setStaffCookies(response, {
-      accessToken: session.refreshedTokens.accessToken,
-      refreshToken: session.refreshedTokens.refreshToken,
-      maxAgeSeconds: session.refreshedTokens.expiresIn,
-    });
+    setStaffCookies(
+      response,
+      {
+        sessionId: session.refreshedTokens.sessionId,
+        accessToken: session.refreshedTokens.accessToken,
+        refreshToken: session.refreshedTokens.refreshToken,
+        maxAgeSeconds: session.refreshedTokens.expiresIn,
+      },
+      request
+    );
+    response.headers.set(
+      'X-Staff-Refreshed-Token',
+      session.refreshedTokens.accessToken
+    );
   }
 
   return response;

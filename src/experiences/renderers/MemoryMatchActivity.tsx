@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { RotateCcw, Sparkles, Volume2 } from 'lucide-react';
+import type { VoiceProfile } from '../../../packages/contracts/types';
 import { AssetImage } from '../../components/AssetImage';
 import { speakText } from '../../audio/speechPlayer';
 import {
@@ -35,6 +36,8 @@ interface MemoryMatchActivityProps {
   learningLocale: string;
   isVi: boolean;
   audioSpeed?: number;
+  voiceProfile?: VoiceProfile | null;
+  accent?: string;
   preschoolAssist?: boolean;
   onComplete?: (moves: number) => void;
 }
@@ -80,6 +83,8 @@ export function MemoryMatchActivity({
   learningLocale,
   isVi,
   audioSpeed = 0.9,
+  voiceProfile = null,
+  accent,
   preschoolAssist = true,
   onComplete,
 }: MemoryMatchActivityProps) {
@@ -124,8 +129,10 @@ export function MemoryMatchActivity({
     speakText({
       text: card.term,
       locale: learningLocale,
+      accent,
       rate: audioSpeed,
       audioUrl: card.audioUrl,
+      voiceProfile,
     });
 
     const nextFlipped = [...flippedUids, card.uid];

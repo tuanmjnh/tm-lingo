@@ -36,7 +36,7 @@ function loadDotEnvFile(filename: string): void {
 loadDotEnvFile('.env.local');
 loadDotEnvFile('.env');
 
-const DEFAULT_DEV_SESSION_SECRET = 'tm-lingo-local-dev-session-secret';
+const EPHEMERAL_SESSION_FALLBACK = crypto.randomBytes(32).toString('hex');
 
 const serverEnvSchema = z.object({
   // Runtime
@@ -77,12 +77,6 @@ const serverEnvSchema = z.object({
   HUB_DEVICE_ID: z.string().default(''),
   HUB_DEVICE_SECRET: z.string().default(''),
 
-  // Local dev staff fallback (only used when Hub URL is not configured)
-  SEED_ROOT_EMAIL: z.string().default('root@tm-lingo.app'),
-  SEED_ROOT_PASSWORD: z.string().default(''),
-  SEED_ADMIN_EMAIL: z.string().default('admin@tm-lingo.app'),
-  SEED_ADMIN_PASSWORD: z.string().default('TmLingoAdmin#2026'),
-
   // Firebase optional client VAPID key
   NEXT_PUBLIC_FIREBASE_VAPID_KEY: z.string().default(''),
 
@@ -106,7 +100,7 @@ const serverEnvSchema = z.object({
   VAPID_PRIVATE_KEY: z.string().default(''),
 
   // Session Signing Secret
-  SESSION_SECRET: z.string().default(DEFAULT_DEV_SESSION_SECRET),
+  SESSION_SECRET: z.string().default(''),
 });
 
 const hubUrl =
@@ -171,7 +165,7 @@ export function getMasterEncryptionKey(): Uint8Array {
     env.AUTH_JWT_SECRET.trim() ||
     env.AI_CONFIG_SECRET.trim() ||
     env.SESSION_SECRET.trim() ||
-    DEFAULT_DEV_SESSION_SECRET;
+    EPHEMERAL_SESSION_FALLBACK;
 
   if (env.AI_CONFIG_SECRET.trim()) {
     try {
@@ -237,6 +231,7 @@ export function getRuntimeEnvironmentSummary(mongoStatus?: {
       mongodbConfigured,
       mongodbConnected: mongoStatus?.connected ?? false,
       firebaseConfigured,
+      supabaseConfigured,
       authProvider: env.AUTH_PROVIDER,
       tmHubConfigured,
       hubBaseUrl: env.HUB_BASE_URL || env.VITE_PUBLIC_HUB_URL,
@@ -274,9 +269,7 @@ export function getRuntimeEnvironmentSummary(mongoStatus?: {
       OBJECT_STORAGE_ACCESS_KEY: has(env.OBJECT_STORAGE_ACCESS_KEY),
       OBJECT_STORAGE_SECRET_KEY: has(env.OBJECT_STORAGE_SECRET_KEY),
       OBJECT_STORAGE_PUBLIC_BASE_URL: has(env.OBJECT_STORAGE_PUBLIC_BASE_URL),
-      SESSION_SECRET:
-        has(env.SESSION_SECRET) &&
-        env.SESSION_SECRET.trim() !== DEFAULT_DEV_SESSION_SECRET,
+      SESSION_SECRET: has(env.SESSION_SECRET),
     },
   };
 }

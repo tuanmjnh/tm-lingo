@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { ensureServerInit, jsonError } from '../../../../../../../server/auth/guards';
 import {
+  createStaffSessionRecord,
   loginStaffWithCredentials,
   setStaffCookies,
 } from '../../../../../../../server/auth/hubClient';
@@ -22,15 +23,30 @@ export async function POST(request: NextRequest) {
 
   try {
     const result = await loginStaffWithCredentials(parsed.data);
-    const response = NextResponse.json({
-      user: result.user,
-      iamMode: isTmHubConfigured() ? 'tm-hub' : 'local-dev',
-    });
-    setStaffCookies(response, {
+    const sessionId = await createStaffSessionRecord({
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
+      userId: result.user.id,
       maxAgeSeconds: result.expiresIn,
     });
+
+    const response = NextResponse.json(
+      {
+        user: result.user,
+        iamMode: isTmHubConfigured() ? 'tm-hub' : 'local-dev',
+        accessToken: result.accessToken,
+      },
+      { headers: { 'Cache-Control': 'no-store' } }
+    );
+    setStaffCookies(
+      response,
+      {
+        sessionId,
+        refreshToken: result.refreshToken,
+        maxAgeSeconds: result.expiresIn,
+      },
+      request
+    );
     return response;
   } catch (err) {
     return jsonError(

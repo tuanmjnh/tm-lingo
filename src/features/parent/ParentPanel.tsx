@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Archive,
+  Brain,
   Calendar,
   Check,
+  Copy,
   Download,
   Flame,
   Globe,
@@ -11,7 +13,9 @@ import {
   LogIn,
   LogOut,
   Plus,
+  Share2,
   Trash2,
+  Trophy,
   User,
   UserPlus,
   Volume2,
@@ -30,9 +34,12 @@ import type { UiMessages } from '../../i18n/messages';
 import { apiClient } from '../../shared/apiClient';
 import { speakText } from '../../audio/speechPlayer';
 import {
+  computeGoalStreak,
   computeLast7Days,
+  computeLearnerAchievements,
+  getMasteredWordsList,
+  getTrickyWordsForReview,
   isParentalGateEnabled,
-  loadLearnerRewards,
   setParentalGateEnabled,
 } from '../../lib/learnerRewards';
 
@@ -75,6 +82,7 @@ interface ParentPanelProps {
   ) => Promise<void>;
   onUpdatePreferences: (patch: Partial<LearnerPreferences>) => Promise<void>;
   onFamilyDataChanged: () => Promise<void>;
+  onOpenWordReview?: () => void;
 }
 
 const AVATAR_STYLES: Record<LearnerProfile['avatarTone'], string> = {
@@ -104,6 +112,7 @@ export function ParentPanel({
   onUpdateLearnerProfile,
   onUpdatePreferences,
   onFamilyDataChanged,
+  onOpenWordReview,
 }: ParentPanelProps) {
   const isVi = activeLearner.preferences.interfaceLocale === 'vi';
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -123,6 +132,7 @@ export function ParentPanel({
   const [editAgeBand, setEditAgeBand] = useState(activeLearner.ageBand);
   const [applyAgeDefaults, setApplyAgeDefaults] = useState(true);
   const [profileSaved, setProfileSaved] = useState(false);
+  const [weeklyCopied, setWeeklyCopied] = useState(false);
 
   // Parental Gate local toggle
   const [gateEnabled, setGateEnabled] = useState(false);
@@ -356,11 +366,121 @@ export function ParentPanel({
     activeLearner.id,
     progressRecords.map((r) => r.updatedAt)
   );
-  const learnerRewards = loadLearnerRewards(activeLearner.id);
-  const trickyWordList = Object.values(learnerRewards.trickyWords)
-    .filter((w) => w.replays >= 2)
-    .sort((a, b) => b.replays - a.replays)
-    .slice(0, 5);
+  const goalStreak = computeGoalStreak(activeLearner.id);
+  const achievementSummary = computeLearnerAchievements(activeLearner.id);
+  const allReviewWords = getTrickyWordsForReview(activeLearner.id);
+  const trickyWordList = allReviewWords.slice(0, 6);
+  const masteredWordCount = getMasteredWordsList(activeLearner.id).length;
+
+  const weeklyLessonsCount = weeklySummary.days.reduce(
+    (sum, d) => sum + d.lessons,
+    0
+  );
+  const weeklyStoriesCount = weeklySummary.days.reduce(
+    (sum, d) => sum + d.stories,
+    0
+  );
+  const maxDayActivity = Math.max(
+    1,
+    ...weeklySummary.days.map((d) => d.lessons * 3 + d.stories * 3 + d.words)
+  );
+  const avgLessonCompletionPct =
+    progressRecords.length > 0
+      ? Math.round(
+          progressRecords.reduce(
+            (sum, rec) =>
+              sum +
+              Math.min(
+                100,
+                (rec.completedActivityIds.length /
+                  Math.max(1, rec.totalActivities)) *
+                  100
+              ),
+            0
+          ) / progressRecords.length
+        )
+      : Math.round((weeklySummary.activeDaysCount / 7) * 100);
+
+  const effectiveStreakDays = Math.max(
+    weeklySummary.streakDays,
+    goalStreak.currentStreak
+  );
+  const bestStreakDays = Math.max(
+    effectiveStreakDays,
+    goalStreak.longestStreak
+  );
+
+  const buildWeeklySummaryText = () => {
+    const topReviewTerms = trickyWordList
+      .slice(0, 4)
+      .map((w) => w.term)
+      .join(', ');
+    if (isVi) {
+      const lines = [
+        `Tóm tắt học tập tuần của ${activeLearner.nickname} (TM-Lingo):`,
+        `- Hoạt động: ${weeklySummary.activeDaysCount}/7 ngày · Chuỗi hiện tại: ${effectiveStreakDays} ngày (Kỷ lục: ${bestStreakDays} ngày)`,
+        `- Kết quả 7 ngày: ${weeklyLessonsCount} bài học, ${weeklyStoriesCount} truyện song ngữ, ${weeklySummary.totalWords7d} lượt luyện từ`,
+        `- Tỷ lệ hoàn thành: ${avgLessonCompletionPct}% · Huy hiệu: ${achievementSummary.unlockedCount}/${achievementSummary.totalCount} · Từ khó đã thuộc: ${masteredWordCount}`,
+      ];
+      if (topReviewTerms) {
+        lines.push(`- Gợi ý ôn cùng bé tuần tới: ${topReviewTerms}`);
+      }
+      return lines.join('\n');
+    }
+
+    const lines = [
+      `${activeLearner.nickname}'s Weekly Learning Summary (TM-Lingo):`,
+      `- Active days: ${weeklySummary.activeDaysCount}/7 · Current streak: ${effectiveStreakDays}d (Best: ${bestStreakDays}d)`,
+      `- 7-day progress: ${weeklyLessonsCount} lessons, ${weeklyStoriesCount} stories, ${weeklySummary.totalWords7d} vocabulary practices`,
+      `- Completion rate: ${avgLessonCompletionPct}% · Badges: ${achievementSummary.unlockedCount}/${achievementSummary.totalCount} · Mastered words: ${masteredWordCount}`,
+    ];
+    if (topReviewTerms) {
+      lines.push(`- Words to practice together next: ${topReviewTerms}`);
+    }
+    return lines.join('\n');
+  };
+
+  const handleCopyWeeklySummary = async () => {
+    const summaryText = buildWeeklySummaryText();
+    try {
+      await navigator.clipboard.writeText(summaryText);
+      setWeeklyCopied(true);
+      window.setTimeout(() => setWeeklyCopied(false), 2400);
+    } catch {
+      // Fallback copy via temporary textarea
+      const ta = document.createElement('textarea');
+      ta.value = summaryText;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+        setWeeklyCopied(true);
+        window.setTimeout(() => setWeeklyCopied(false), 2400);
+      } finally {
+        document.body.removeChild(ta);
+      }
+    }
+  };
+
+  const handleShareWeeklySummary = async () => {
+    const summaryText = buildWeeklySummaryText();
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
+        await navigator.share({
+          title: isVi
+            ? `Tiến độ tuần của ${activeLearner.nickname} - TM-Lingo`
+            : `${activeLearner.nickname}'s Weekly Progress - TM-Lingo`,
+          text: summaryText,
+        });
+        return;
+      } catch {
+        // User cancelled or share unavailable — fall back to clipboard copy
+      }
+    }
+    await handleCopyWeeklySummary();
+  };
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -997,7 +1117,7 @@ export function ParentPanel({
             )}
           </section>
 
-          {/* Weekly 7-Day Activity Calendar, Streak & Review Suggestions */}
+          {/* Weekly 7-Day Activity Calendar, KPI Insights, Streak & Shareable Summary */}
           <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-6 space-y-4 sm:space-y-5">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
               <div className="flex items-center gap-2 min-w-0">
@@ -1006,90 +1126,248 @@ export function ParentPanel({
                   aria-hidden="true"
                 />
                 <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100 leading-tight whitespace-nowrap">
-                  {isVi ? 'Nhật ký học 7 ngày qua' : '7-Day Learning Rhythm'}
+                  {isVi ? 'Tóm tắt tiến độ 7 ngày' : '7-Day Learning Insights'}
                 </h2>
               </div>
-              <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 dark:text-amber-400 tabular-nums whitespace-nowrap shrink-0">
-                <Flame
-                  className="w-4 h-4 text-amber-500 shrink-0"
-                  aria-hidden="true"
-                />
-                <span>
-                  {weeklySummary.streakDays}{' '}
-                  {isVi ? 'ngày liên tiếp' : 'day streak'}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/50 border border-amber-200/80 dark:border-amber-800/60 text-xs font-bold text-amber-700 dark:text-amber-300 tabular-nums whitespace-nowrap shrink-0">
+                  <Flame
+                    className="w-3.5 h-3.5 text-amber-500 shrink-0"
+                    aria-hidden="true"
+                  />
+                  <span>
+                    {effectiveStreakDays}{' '}
+                    {isVi ? 'ngày liên tiếp' : 'day streak'}
+                  </span>
                 </span>
-              </span>
+
+                <button
+                  type="button"
+                  onClick={() => void handleCopyWeeklySummary()}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:border-accent hover:text-accent transition-colors cursor-pointer"
+                >
+                  {weeklyCopied ? (
+                    <>
+                      <Check
+                        className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400"
+                        aria-hidden="true"
+                      />
+                      <span className="text-emerald-700 dark:text-emerald-300">
+                        {isVi ? 'Đã sao chép!' : 'Copied!'}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>{isVi ? 'Sao chép' : 'Copy'}</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void handleShareWeeklySummary()}
+                  title={
+                    isVi
+                      ? 'Chia sẻ báo cáo tuần cho gia đình'
+                      : 'Share weekly summary with family'
+                  }
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg btn-accent text-xs font-semibold cursor-pointer"
+                >
+                  <Share2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{isVi ? 'Chia sẻ' : 'Share'}</span>
+                </button>
+              </div>
             </div>
 
+            {/* 4-Card Weekly KPI Strip */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/75 dark:bg-slate-950/60 p-3 space-y-0.5">
+                <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                  {isVi ? 'Chuỗi kỷ lục' : 'Best streak'}
+                </p>
+                <p className="text-lg font-extrabold text-orange-600 dark:text-orange-400 tabular-nums">
+                  {bestStreakDays} {isVi ? 'ngày' : 'd'}
+                </p>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 tabular-nums">
+                  {isVi
+                    ? `Hiện tại: ${effectiveStreakDays} ngày`
+                    : `Current: ${effectiveStreakDays}d`}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/75 dark:bg-slate-950/60 p-3 space-y-0.5">
+                <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                  {isVi ? 'Bài & Truyện (7n)' : 'Lessons & Stories'}
+                </p>
+                <p className="text-lg font-extrabold text-sky-600 dark:text-sky-400 tabular-nums">
+                  {weeklyLessonsCount + weeklyStoriesCount}
+                </p>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 tabular-nums">
+                  {weeklyLessonsCount} {isVi ? 'bài' : 'les'} ·{' '}
+                  {weeklyStoriesCount} {isVi ? 'truyện' : 'st'}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/75 dark:bg-slate-950/60 p-3 space-y-0.5">
+                <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                  {isVi ? 'Hoàn thành' : 'Completion'}
+                </p>
+                <p className="text-lg font-extrabold text-emerald-600 dark:text-emerald-400 tabular-nums">
+                  {avgLessonCompletionPct}%
+                </p>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 tabular-nums">
+                  {weeklySummary.activeDaysCount}/7{' '}
+                  {isVi ? 'ngày học' : 'active days'}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/75 dark:bg-slate-950/60 p-3 space-y-0.5">
+                <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 inline-flex items-center gap-1">
+                  <Trophy className="w-3 h-3 text-amber-500" aria-hidden="true" />
+                  <span>{isVi ? 'Huy hiệu' : 'Badges'}</span>
+                </p>
+                <p className="text-lg font-extrabold text-amber-600 dark:text-amber-400 tabular-nums">
+                  {achievementSummary.unlockedCount}/
+                  {achievementSummary.totalCount}
+                </p>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 tabular-nums">
+                  {masteredWordCount} {isVi ? 'từ đã thuộc' : 'words mastered'}
+                </p>
+              </div>
+            </div>
+
+            {/* 7-Day Activity Calendar with Visual Intensity Bars */}
             <div className="grid grid-cols-7 gap-1 sm:gap-2">
-              {weeklySummary.days.map((day) => (
-                <div
-                  key={day.dateKey}
-                  title={`${day.dateKey}: ${day.lessons} lessons, ${day.stories} stories`}
-                  className={`flex flex-col items-center justify-center rounded-xl border px-0 py-2 sm:px-1.5 sm:py-2.5 min-w-0 gap-1.5 ${
-                    day.active
-                      ? 'border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-900 dark:text-emerald-200'
-                      : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-400 dark:text-slate-500'
-                  }`}
-                >
-                  <span className="text-[10px] sm:text-[11px] font-semibold leading-none text-center">
-                    {day.shortDay}
-                  </span>
+              {weeklySummary.days.map((day) => {
+                const activityScore =
+                  day.lessons * 3 + day.stories * 3 + day.words;
+                const barHeightPct = day.active
+                  ? Math.max(24, Math.round((activityScore / maxDayActivity) * 100))
+                  : 12;
+                return (
                   <div
-                    className={`w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center shrink-0 ${
+                    key={day.dateKey}
+                    title={
+                      isVi
+                        ? `${day.dateKey}: ${day.lessons} bài học, ${day.stories} truyện, ${day.words} lượt từ`
+                        : `${day.dateKey}: ${day.lessons} lessons, ${day.stories} stories, ${day.words} words`
+                    }
+                    className={`flex flex-col items-center justify-between rounded-xl border px-0 py-2 sm:px-1.5 sm:py-2.5 min-w-0 gap-1.5 ${
                       day.active
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-slate-200/70 dark:bg-slate-800 text-slate-400'
+                        ? 'border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-900 dark:text-emerald-200'
+                        : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-400 dark:text-slate-500'
                     }`}
                   >
-                    {day.active ? (
-                      <Check className="w-3.5 h-3.5" aria-hidden="true" />
-                    ) : (
-                      <span className="text-[10px] leading-none">·</span>
-                    )}
+                    <span className="text-[10px] sm:text-[11px] font-semibold leading-none text-center">
+                      {day.shortDay}
+                    </span>
+
+                    <div className="w-2.5 h-8 rounded-full bg-slate-200/70 dark:bg-slate-800 flex items-end overflow-hidden">
+                      <div
+                        className={`w-full rounded-full transition-all ${
+                          day.active
+                            ? 'bg-emerald-500 dark:bg-emerald-400'
+                            : 'bg-slate-300/60 dark:bg-slate-700'
+                        }`}
+                        style={{ height: `${barHeightPct}%` }}
+                      />
+                    </div>
+
+                    <div
+                      className={`w-5 h-5 sm:w-6 sm:h-6 rounded-full flex items-center justify-center shrink-0 ${
+                        day.active
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-200/70 dark:bg-slate-800 text-slate-400'
+                      }`}
+                    >
+                      {day.active ? (
+                        <Check className="w-3 h-3" aria-hidden="true" />
+                      ) : (
+                        <span className="text-[10px] leading-none">·</span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed tabular-nums">
               {isVi
-                ? `Tuần này ${activeLearner.nickname} đã hoạt động ${weeklySummary.activeDaysCount}/7 ngày và luyện khoảng ${weeklySummary.totalWords7d} lượt từ vựng.`
-                : `Active ${weeklySummary.activeDaysCount}/7 days this week with ~${weeklySummary.totalWords7d} vocabulary practices.`}
+                ? `Tuần này ${activeLearner.nickname} đã hoạt động ${weeklySummary.activeDaysCount}/7 ngày, hoàn thành ${weeklyLessonsCount} bài học, ${weeklyStoriesCount} truyện và luyện khoảng ${weeklySummary.totalWords7d} lượt từ vựng.`
+                : `Active ${weeklySummary.activeDaysCount}/7 days this week with ${weeklyLessonsCount} lessons, ${weeklyStoriesCount} stories, and ~${weeklySummary.totalWords7d} vocabulary practices.`}
             </p>
 
-            {trickyWordList.length > 0 && (
-              <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-2">
-                <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                  {isVi
-                    ? 'Gợi ý từ con bấm nghe nhiều lần (nên ôn lại cùng bé):'
-                    : 'Suggested words to review together (replayed often):'}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {trickyWordList.map((w) => (
+            {(trickyWordList.length > 0 || masteredWordCount > 0) && (
+              <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                      {isVi
+                        ? 'Từ con hay bấm nghe lại (nên ôn cùng bé):'
+                        : 'Words to review together (replayed often):'}
+                    </p>
+                    {masteredWordCount > 0 && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/70 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 tabular-nums">
+                        <Check className="w-3 h-3" aria-hidden="true" />
+                        <span>
+                          {isVi
+                            ? `Đã thuộc ${masteredWordCount} từ`
+                            : `${masteredWordCount} mastered`}
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                  {onOpenWordReview && (
                     <button
-                      key={w.term}
                       type="button"
-                      onClick={() =>
-                        speakText({
-                          text: w.term,
-                          locale: activeLearner.preferences.learningLocale,
-                          rate: 0.85,
-                        })
-                      }
-                      className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[38px] max-w-full rounded-xl border border-accent bg-accent-soft text-xs font-semibold text-left cursor-pointer"
+                      onClick={onOpenWordReview}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl btn-accent text-xs font-semibold cursor-pointer"
                     >
-                      <Volume2
-                        className="w-3.5 h-3.5 text-accent shrink-0"
-                        aria-hidden="true"
-                      />
-                      <span className="truncate">{w.term}</span>
-                      <span className="text-[10px] opacity-80 tabular-nums shrink-0">
-                        ×{w.replays}
+                      <Brain className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>
+                        {trickyWordList.length > 0
+                          ? isVi
+                            ? `Ôn nhanh (${allReviewWords.length})`
+                            : `Start Review (${allReviewWords.length})`
+                          : isVi
+                            ? 'Xem từ đã thuộc'
+                            : 'View mastered'}
                       </span>
                     </button>
-                  ))}
+                  )}
                 </div>
+
+                {trickyWordList.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {trickyWordList.map((w) => (
+                      <button
+                        key={w.key}
+                        type="button"
+                        onClick={() =>
+                          speakText({
+                            text: w.term,
+                            locale:
+                              w.locale ||
+                              activeLearner.preferences.learningLocale,
+                            rate: 0.85,
+                          })
+                        }
+                        className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[38px] max-w-full rounded-xl border border-accent bg-accent-soft text-xs font-semibold text-left cursor-pointer"
+                      >
+                        <Volume2
+                          className="w-3.5 h-3.5 text-accent shrink-0"
+                          aria-hidden="true"
+                        />
+                        <span className="truncate">{w.term}</span>
+                        <span className="text-[10px] opacity-80 tabular-nums shrink-0">
+                          ×{w.replays}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </section>

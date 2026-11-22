@@ -1,5 +1,6 @@
+import crypto from 'node:crypto';
 import { createHubClient, type HubClient } from '@tuanmjnh/tm-hub-client';
-import { createLocalJWKSet, jwtVerify, SignJWT, type JSONWebKeySet } from 'jose';
+import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from 'jose';
 import type { NextRequest, NextResponse } from 'next/server';
 import type {
   AuthUserProfile,
@@ -18,6 +19,7 @@ import { getMongoCollection } from '../db/mongo';
 
 export { HARD_DELETE_CAPABILITY, isRootStaff };
 
+export const STAFF_SESSION_COOKIE = 'tm_lingo_staff_sid';
 export const STAFF_ACCESS_COOKIE = 'tm_lingo_staff_token';
 export const STAFF_REFRESH_COOKIE = 'tm_lingo_staff_refresh';
 
@@ -49,12 +51,15 @@ const TEACHER_CAPABILITIES = [
   'tm-lingo.notifications.manage',
 ];
 
+const EPHEMERAL_LOCAL_SIGNING_KEY = crypto.randomBytes(32);
+
 function getLocalSigningSecret(): Uint8Array {
-  return new TextEncoder().encode(
-    env.AUTH_JWT_SECRET.trim() ||
-      env.SESSION_SECRET.trim() ||
-      'tm-lingo-local-dev-session-secret'
-  );
+  const configured =
+    env.AUTH_JWT_SECRET.trim() || env.SESSION_SECRET.trim();
+  if (configured) {
+    return new TextEncoder().encode(configured);
+  }
+  return new Uint8Array(EPHEMERAL_LOCAL_SIGNING_KEY);
 }
 
 export function createServerHubClient(options?: {
@@ -106,45 +111,277 @@ async function getHubJwksVerifier() {
   return jwks;
 }
 
+const STAFF_PROFILE_CACHE_TTL_MS = 60 * 1000;
+const STAFF_SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days (matches refresh token window)
+
+interface StoredStaffSession {
+  sessionId: string;
+  accessToken: string;
+  refreshToken?: string;
+  userId: string;
+  expiresAt: number;
+  updatedAt: string;
+}
+
+const globalStaffState = globalThis as typeof globalThis & {
+  __tmLingoStaffProfileCache?: Map<
+    string,
+    { profile: AuthUserProfile; expiresAt: number }
+  >;
+  __tmLingoStaffSessions?: Map<string, StoredStaffSession>;
+};
+
+const verifiedStaffProfileCache =
+  globalStaffState.__tmLingoStaffProfileCache ??
+  (globalStaffState.__tmLingoStaffProfileCache = new Map());
+
+const staffSessionsMemory =
+  globalStaffState.__tmLingoStaffSessions ??
+  (globalStaffState.__tmLingoStaffSessions = new Map());
+
+function hashAccessToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function cacheVerifiedStaffProfile(
+  token: string,
+  profile: AuthUserProfile,
+  expiresInSeconds?: number
+): void {
+  const ttlMs = expiresInSeconds
+    ? Math.min(STAFF_PROFILE_CACHE_TTL_MS, Math.max(5_000, expiresInSeconds * 1000))
+    : STAFF_PROFILE_CACHE_TTL_MS;
+  verifiedStaffProfileCache.set(hashAccessToken(token), {
+    profile,
+    expiresAt: Date.now() + ttlMs,
+  });
+  if (verifiedStaffProfileCache.size > 200) {
+    const now = Date.now();
+    for (const [key, entry] of verifiedStaffProfileCache) {
+      if (entry.expiresAt <= now) {
+        verifiedStaffProfileCache.delete(key);
+      }
+    }
+  }
+}
+
+function getCachedStaffProfile(token: string): AuthUserProfile | null {
+  const key = hashAccessToken(token);
+  const entry = verifiedStaffProfileCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    verifiedStaffProfileCache.delete(key);
+    return null;
+  }
+  return entry.profile;
+}
+
+function invalidateCachedStaffProfile(token?: string | null): void {
+  if (!token) return;
+  verifiedStaffProfileCache.delete(hashAccessToken(token));
+}
+
+export async function createStaffSessionRecord(input: {
+  accessToken: string;
+  refreshToken?: string | null;
+  userId: string;
+  maxAgeSeconds?: number;
+}): Promise<string> {
+  const sessionId = crypto.randomBytes(32).toString('hex');
+  const ttlMs = input.refreshToken
+    ? STAFF_SESSION_TTL_MS
+    : (input.maxAgeSeconds ?? 60 * 60 * 8) * 1000;
+  const record: StoredStaffSession = {
+    sessionId,
+    accessToken: input.accessToken,
+    refreshToken: input.refreshToken || undefined,
+    userId: input.userId,
+    expiresAt: Date.now() + ttlMs,
+    updatedAt: new Date().toISOString(),
+  };
+
+  staffSessionsMemory.set(sessionId, record);
+
+  const col = await getMongoCollection<StoredStaffSession>('staff_sessions');
+  if (col) {
+    await col.updateOne(
+      { sessionId },
+      { $set: record },
+      { upsert: true }
+    );
+  }
+  return sessionId;
+}
+
+async function getStaffSessionRecord(
+  sessionId: string
+): Promise<StoredStaffSession | null> {
+  const mem = staffSessionsMemory.get(sessionId);
+  if (mem) {
+    if (mem.expiresAt <= Date.now()) {
+      staffSessionsMemory.delete(sessionId);
+      return null;
+    }
+    return mem;
+  }
+
+  const col = await getMongoCollection<StoredStaffSession>('staff_sessions');
+  if (col) {
+    const doc = await col.findOne({ sessionId }, { projection: { _id: 0 } });
+    if (doc) {
+      if (doc.expiresAt <= Date.now()) {
+        await col.deleteOne({ sessionId });
+        return null;
+      }
+      staffSessionsMemory.set(sessionId, doc);
+      return doc;
+    }
+  }
+  return null;
+}
+
+async function updateStaffSessionRecord(
+  sessionId: string,
+  tokens: { accessToken: string; refreshToken?: string; expiresIn?: number }
+): Promise<void> {
+  const existing = await getStaffSessionRecord(sessionId);
+  if (!existing) return;
+  const updated: StoredStaffSession = {
+    ...existing,
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken || existing.refreshToken,
+    expiresAt: Date.now() + STAFF_SESSION_TTL_MS,
+    updatedAt: new Date().toISOString(),
+  };
+  staffSessionsMemory.set(sessionId, updated);
+  const col = await getMongoCollection<StoredStaffSession>('staff_sessions');
+  if (col) {
+    await col.updateOne({ sessionId }, { $set: updated });
+  }
+}
+
+async function deleteStaffSessionRecord(sessionId?: string | null): Promise<void> {
+  if (!sessionId) return;
+  staffSessionsMemory.delete(sessionId);
+  const col = await getMongoCollection<StoredStaffSession>('staff_sessions');
+  if (col) {
+    await col.deleteOne({ sessionId });
+  }
+}
+
+function isLocalhostHost(host?: string | null): boolean {
+  if (!host) return false;
+  const hostname = host.split(',')[0]?.trim().toLowerCase().replace(/:\d+$/, '');
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '[::1]' ||
+    hostname === '::1'
+  );
+}
+
+function isHttpsRequest(request?: NextRequest): boolean {
+  if (request) {
+    const origin = request.headers.get('origin')?.trim().toLowerCase() ?? '';
+    if (origin.startsWith('https://')) return true;
+
+    const referer = request.headers.get('referer')?.trim().toLowerCase() ?? '';
+    if (referer.startsWith('https://')) return true;
+
+    const forwardedProto = request.headers
+      .get('x-forwarded-proto')
+      ?.split(',')[0]
+      ?.trim()
+      .toLowerCase();
+    if (forwardedProto === 'https') return true;
+
+    if (request.url.startsWith('https://')) return true;
+
+    const host =
+      request.headers.get('x-forwarded-host') || request.headers.get('host');
+    if (host && !isLocalhostHost(host)) {
+      return true;
+    }
+
+    if (forwardedProto === 'http' && isLocalhostHost(host)) {
+      return false;
+    }
+  }
+  return env.NODE_ENV === 'production';
+}
+
+export function extractStaffBearerToken(request: NextRequest): string | undefined {
+  const header = request.headers.get('authorization')?.trim();
+  if (!header || !header.toLowerCase().startsWith('bearer ')) {
+    return undefined;
+  }
+  const token = header.slice(7).trim();
+  return token || undefined;
+}
+
 export function setStaffCookies(
   response: NextResponse,
-  tokens: { accessToken: string; refreshToken?: string | null; maxAgeSeconds?: number }
+  tokens: {
+    sessionId?: string;
+    accessToken?: string;
+    refreshToken?: string | null;
+    maxAgeSeconds?: number;
+  },
+  request?: NextRequest
 ): void {
-  const isProd = env.NODE_ENV === 'production';
-  response.cookies.set(STAFF_ACCESS_COOKIE, tokens.accessToken, {
+  const secure = isHttpsRequest(request);
+  const cookieBase = {
     httpOnly: true,
-    sameSite: 'lax',
-    secure: isProd,
+    sameSite: (secure ? 'none' : 'lax') as 'none' | 'lax',
+    secure,
+    ...(secure ? { partitioned: true } : {}),
     path: '/',
-    maxAge: tokens.maxAgeSeconds ?? 60 * 60 * 8,
-  });
+  };
+
+  if (tokens.sessionId) {
+    // Compact opaque session cookie (< 120 bytes) avoids 4KB browser cookie drop on large JWTs
+    response.cookies.set(STAFF_SESSION_COOKIE, tokens.sessionId, {
+      ...cookieBase,
+      maxAge: tokens.refreshToken
+        ? 60 * 60 * 24 * 14
+        : (tokens.maxAgeSeconds ?? 60 * 60 * 8),
+    });
+    // Clear legacy raw-token cookies if present
+    response.cookies.set(STAFF_ACCESS_COOKIE, '', { ...cookieBase, maxAge: 0 });
+    response.cookies.set(STAFF_REFRESH_COOKIE, '', { ...cookieBase, maxAge: 0 });
+    return;
+  }
+
+  if (tokens.accessToken) {
+    response.cookies.set(STAFF_ACCESS_COOKIE, tokens.accessToken, {
+      ...cookieBase,
+      maxAge: tokens.maxAgeSeconds ?? 60 * 60 * 8,
+    });
+  }
   if (tokens.refreshToken) {
     response.cookies.set(STAFF_REFRESH_COOKIE, tokens.refreshToken, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: isProd,
-      path: '/',
+      ...cookieBase,
       maxAge: 60 * 60 * 24 * 14,
     });
   }
 }
 
-export function clearStaffCookies(response: NextResponse): void {
-  const isProd = env.NODE_ENV === 'production';
-  response.cookies.set(STAFF_ACCESS_COOKIE, '', {
+export function clearStaffCookies(
+  response: NextResponse,
+  request?: NextRequest
+): void {
+  const secure = isHttpsRequest(request);
+  const cookieBase = {
     httpOnly: true,
-    sameSite: 'lax',
-    secure: isProd,
+    sameSite: (secure ? 'none' : 'lax') as 'none' | 'lax',
+    secure,
+    ...(secure ? { partitioned: true } : {}),
     path: '/',
     maxAge: 0,
-  });
-  response.cookies.set(STAFF_REFRESH_COOKIE, '', {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: isProd,
-    path: '/',
-    maxAge: 0,
-  });
+  };
+  response.cookies.set(STAFF_SESSION_COOKIE, '', cookieBase);
+  response.cookies.set(STAFF_ACCESS_COOKIE, '', cookieBase);
+  response.cookies.set(STAFF_REFRESH_COOKIE, '', cookieBase);
 }
 
 function derivePrimaryStaffRole(roles: string[], capabilities: string[]): UserRole {
@@ -207,6 +444,12 @@ export async function loginStaffWithCredentials(input: {
       capabilities,
     };
 
+    cacheVerifiedStaffProfile(
+      res.data.accessToken,
+      profile,
+      res.data.expiresIn
+    );
+
     await recordStaffAudit({
       action: 'staff.login',
       modelName: 'staff_session',
@@ -224,92 +467,16 @@ export async function loginStaffWithCredentials(input: {
     };
   }
 
-  // Local dev fallback ONLY when HUB_BASE_URL is not configured
-  const seedRootEmail = env.SEED_ROOT_EMAIL.trim().toLowerCase();
-  const seedRootPassword = (
-    env.SEED_ROOT_PASSWORD.trim() || env.SEED_ADMIN_PASSWORD.trim()
+  throw new Error(
+    'TM-Hub chưa được cấu hình. Vui lòng thiết lập VITE_PUBLIC_HUB_URL (hoặc HUB_BASE_URL) trong biến môi trường để đăng nhập quản trị.'
   );
-  const seedAdminEmail = env.SEED_ADMIN_EMAIL.trim().toLowerCase();
-  const seedAdminPassword = env.SEED_ADMIN_PASSWORD.trim();
-
-  let matchedRole: 'admin' | 'teacher' | null = null;
-  let matchedRoles: string[] = [];
-  let matchedCapabilities: string[] = [];
-  let matchedName = 'TM-Lingo System Admin';
-  let matchedId = 'local-staff-admin';
-
-  if (email === seedRootEmail && password === seedRootPassword) {
-    matchedRole = 'admin';
-    matchedRoles = ['root'];
-    matchedCapabilities = ROOT_CAPABILITIES;
-    matchedName = 'TM-Lingo Root';
-    matchedId = 'local-staff-root';
-  } else if (email === seedAdminEmail && password === seedAdminPassword) {
-    matchedRole = 'admin';
-    matchedRoles = ['admin'];
-    matchedCapabilities = ADMIN_CAPABILITIES;
-    matchedName = 'TM-Lingo System Admin';
-    matchedId = 'local-staff-admin';
-  } else if (email === 'teacher@tm-lingo.app' && password === seedAdminPassword) {
-    matchedRole = 'teacher';
-    matchedRoles = ['teacher'];
-    matchedCapabilities = TEACHER_CAPABILITIES;
-    matchedName = 'TM-Lingo Teacher';
-    matchedId = 'local-staff-teacher';
-  }
-
-  if (!matchedRole) {
-    throw new Error(
-      'Invalid staff credentials. Configure HUB_BASE_URL to sign in with TM-Hub, or use the local staff credentials.'
-    );
-  }
-
-  const accessToken = await new SignJWT({
-    sub: matchedId,
-    email,
-    name: matchedName,
-    role: matchedRole,
-    roles: matchedRoles,
-    capabilities: matchedCapabilities,
-  })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setIssuer(LOCAL_STAFF_ISSUER)
-    .setAudience(LOCAL_STAFF_AUDIENCE)
-    .setExpirationTime('8h')
-    .sign(getLocalSigningSecret());
-
-  const profile: AuthUserProfile = {
-    id: matchedId,
-    email,
-    displayName: matchedName,
-    role: matchedRole,
-    provider: 'local-staff',
-    roles: matchedRoles,
-    capabilities: matchedCapabilities,
-  };
-
-  await ensureLocalStaffRecords();
-  await recordStaffAudit({
-    action: 'staff.login',
-    modelName: 'staff_session',
-    docId: profile.id,
-    actorName: profile.displayName || email,
-    actorEmail: email,
-    summary: `Local staff signed in (${matchedRoles.join(', ')})`,
-  });
-
-  return {
-    user: profile,
-    accessToken,
-    expiresIn: 60 * 60 * 8,
-  };
 }
 
 export interface ResolvedStaffSession {
   user: AuthUserProfile;
   accessToken: string;
   refreshedTokens?: {
+    sessionId?: string;
     accessToken: string;
     refreshToken: string;
     expiresIn: number;
@@ -355,6 +522,11 @@ async function verifyLocalStaffToken(token: string): Promise<AuthUserProfile | n
 async function resolveHubStaffFromToken(
   accessToken: string
 ): Promise<AuthUserProfile | null> {
+  const cached = getCachedStaffProfile(accessToken);
+  if (cached) {
+    return cached;
+  }
+
   const hub = createServerHubClient({ accessToken });
 
   // Cryptographic verification: RS256 via TM-Hub JWKS first, fallback to HS256 with AUTH_JWT_SECRET
@@ -384,48 +556,60 @@ async function resolveHubStaffFromToken(
       hub.auth.permissions().catch(() => null),
     ]);
     if (meRes.success && meRes.data) {
-      const roles = permRes?.data?.roles ?? meRes.data.roles ?? [];
-      const capabilities =
-        permRes?.data?.permissions ?? meRes.data.permissions ?? [];
-      const primaryRole = derivePrimaryStaffRole(roles, capabilities);
+      const rawData = meRes.data as typeof meRes.data & { userId?: string };
+      const id = rawData.id || rawData.userId;
+      if (id) {
+        const roles = permRes?.data?.roles ?? rawData.roles ?? [];
+        const capabilities =
+          permRes?.data?.permissions ?? rawData.permissions ?? [];
+        const primaryRole = derivePrimaryStaffRole(roles, capabilities);
 
-      return {
-        id: meRes.data.id,
-        email: meRes.data.email ?? null,
-        displayName: meRes.data.name ?? meRes.data.email ?? null,
-        role: primaryRole,
-        provider: 'tm-hub',
-        roles,
-        capabilities,
-      };
+        const profile: AuthUserProfile = {
+          id,
+          email: rawData.email ?? null,
+          displayName: rawData.name ?? rawData.email ?? null,
+          role: primaryRole,
+          provider: 'tm-hub',
+          roles,
+          capabilities,
+        };
+        cacheVerifiedStaffProfile(accessToken, profile);
+        return profile;
+      }
     }
   } catch {
-    // If hub API is unreachable but token was cryptographically verified
-    if (verified && verifiedClaims && typeof verifiedClaims.sub === 'string') {
-      const roles = Array.isArray(verifiedClaims.roles)
-        ? (verifiedClaims.roles as string[])
+    // Fall through to verified JWT claims below if cryptographic verification succeeded
+  }
+
+  // Fallback when token passed cryptographic RS256/HS256 verification even if hub.auth.me() failed or timed out
+  if (verified && verifiedClaims && typeof verifiedClaims.sub === 'string') {
+    const roles = Array.isArray(verifiedClaims.roles)
+      ? (verifiedClaims.roles as string[])
+      : typeof verifiedClaims.role === 'string'
+        ? [verifiedClaims.role]
         : [];
-      const capabilities = Array.isArray(verifiedClaims.permissions)
-        ? (verifiedClaims.permissions as string[])
-        : Array.isArray(verifiedClaims.capabilities)
-          ? (verifiedClaims.capabilities as string[])
-          : [];
-      const primaryRole = derivePrimaryStaffRole(roles, capabilities);
-      return {
-        id: verifiedClaims.sub,
-        email: typeof verifiedClaims.email === 'string' ? verifiedClaims.email : null,
-        displayName:
-          typeof verifiedClaims.name === 'string'
-            ? verifiedClaims.name
-            : typeof verifiedClaims.email === 'string'
-              ? verifiedClaims.email
-              : null,
-        role: primaryRole,
-        provider: 'tm-hub',
-        roles,
-        capabilities,
-      };
-    }
+    const capabilities = Array.isArray(verifiedClaims.permissions)
+      ? (verifiedClaims.permissions as string[])
+      : Array.isArray(verifiedClaims.capabilities)
+        ? (verifiedClaims.capabilities as string[])
+        : [];
+    const primaryRole = derivePrimaryStaffRole(roles, capabilities);
+    const profile: AuthUserProfile = {
+      id: verifiedClaims.sub,
+      email: typeof verifiedClaims.email === 'string' ? verifiedClaims.email : null,
+      displayName:
+        typeof verifiedClaims.name === 'string'
+          ? verifiedClaims.name
+          : typeof verifiedClaims.email === 'string'
+            ? verifiedClaims.email
+            : null,
+      role: primaryRole,
+      provider: 'tm-hub',
+      roles,
+      capabilities,
+    };
+    cacheVerifiedStaffProfile(accessToken, profile);
+    return profile;
   }
 
   return null;
@@ -434,8 +618,18 @@ async function resolveHubStaffFromToken(
 export async function resolveStaffSessionFromRequest(
   request: NextRequest
 ): Promise<ResolvedStaffSession | null> {
-  const accessToken = request.cookies.get(STAFF_ACCESS_COOKIE)?.value?.trim();
-  const refreshToken = request.cookies.get(STAFF_REFRESH_COOKIE)?.value?.trim();
+  const sessionId = request.cookies.get(STAFF_SESSION_COOKIE)?.value?.trim();
+  const storedSession = sessionId
+    ? await getStaffSessionRecord(sessionId)
+    : null;
+
+  const accessToken =
+    storedSession?.accessToken ||
+    request.cookies.get(STAFF_ACCESS_COOKIE)?.value?.trim() ||
+    extractStaffBearerToken(request);
+  const refreshToken =
+    storedSession?.refreshToken ||
+    request.cookies.get(STAFF_REFRESH_COOKIE)?.value?.trim();
 
   if (!accessToken && !refreshToken) return null;
 
@@ -453,7 +647,7 @@ export async function resolveStaffSessionFromRequest(
     }
   }
 
-  // Silent single refresh if access token expired and refresh cookie is present
+  // Silent single refresh if access token expired and refresh token is available
   if (refreshToken) {
     try {
       const hub = createServerHubClient();
@@ -462,10 +656,18 @@ export async function resolveStaffSessionFromRequest(
         const nextTokens = refreshRes.data;
         const user = await resolveHubStaffFromToken(nextTokens.accessToken);
         if (user) {
+          if (sessionId && storedSession) {
+            await updateStaffSessionRecord(sessionId, {
+              accessToken: nextTokens.accessToken,
+              refreshToken: nextTokens.refreshToken,
+              expiresIn: nextTokens.expiresIn,
+            });
+          }
           return {
             user,
             accessToken: nextTokens.accessToken,
             refreshedTokens: {
+              sessionId: sessionId && storedSession ? sessionId : undefined,
               accessToken: nextTokens.accessToken,
               refreshToken: nextTokens.refreshToken,
               expiresIn: nextTokens.expiresIn,
@@ -482,8 +684,21 @@ export async function resolveStaffSessionFromRequest(
 }
 
 export async function logoutStaffSession(request: NextRequest): Promise<void> {
-  const accessToken = request.cookies.get(STAFF_ACCESS_COOKIE)?.value?.trim();
-  const refreshToken = request.cookies.get(STAFF_REFRESH_COOKIE)?.value?.trim();
+  const sessionId = request.cookies.get(STAFF_SESSION_COOKIE)?.value?.trim();
+  const storedSession = sessionId
+    ? await getStaffSessionRecord(sessionId)
+    : null;
+
+  const accessToken =
+    storedSession?.accessToken ||
+    request.cookies.get(STAFF_ACCESS_COOKIE)?.value?.trim() ||
+    extractStaffBearerToken(request);
+  const refreshToken =
+    storedSession?.refreshToken ||
+    request.cookies.get(STAFF_REFRESH_COOKIE)?.value?.trim();
+
+  await deleteStaffSessionRecord(sessionId);
+  invalidateCachedStaffProfile(accessToken);
 
   if (isTmHubConfigured() && (accessToken || refreshToken)) {
     try {
@@ -533,59 +748,6 @@ export function hasStaffCapability(
 const localStaffMemory: Map<string, ManagedUserRecord> = new Map();
 const localAuditMemory: StaffAuditLogEntry[] = [];
 
-async function ensureLocalStaffRecords(): Promise<void> {
-  const now = new Date().toISOString();
-  const defaults: ManagedUserRecord[] = [
-    {
-      userId: 'local-staff-root',
-      email: env.SEED_ROOT_EMAIL.trim().toLowerCase(),
-      displayName: 'TM-Lingo Root',
-      role: 'admin',
-      roles: ['root'],
-      isActive: true,
-      source: 'local',
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      userId: 'local-staff-admin',
-      email: env.SEED_ADMIN_EMAIL.trim().toLowerCase(),
-      displayName: 'TM-Lingo System Admin',
-      role: 'admin',
-      roles: ['admin'],
-      isActive: true,
-      source: 'local',
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      userId: 'local-staff-teacher',
-      email: 'teacher@tm-lingo.app',
-      displayName: 'TM-Lingo Teacher',
-      role: 'teacher',
-      roles: ['teacher'],
-      isActive: true,
-      source: 'local',
-      createdAt: now,
-      updatedAt: now,
-    },
-  ];
-
-  const col = await getMongoCollection<ManagedUserRecord>('user_roles');
-  for (const item of defaults) {
-    if (!localStaffMemory.has(item.userId)) {
-      localStaffMemory.set(item.userId, item);
-    }
-    if (col) {
-      await col.updateOne(
-        { userId: item.userId },
-        { $setOnInsert: item },
-        { upsert: true }
-      );
-    }
-  }
-}
-
 export async function listStaffUsers(
   accessToken: string
 ): Promise<{ users: ManagedUserRecord[]; source: 'tm-hub' | 'local' }> {
@@ -610,7 +772,6 @@ export async function listStaffUsers(
     return { users: items, source: 'tm-hub' };
   }
 
-  await ensureLocalStaffRecords();
   const col = await getMongoCollection<ManagedUserRecord>('user_roles');
   if (col) {
     const docs = await col
@@ -645,7 +806,6 @@ export async function updateStaffUserRole(input: {
     return updated;
   }
 
-  await ensureLocalStaffRecords();
   const col = await getMongoCollection<ManagedUserRecord>('user_roles');
   const existing = col
     ? await col.findOne({ userId: input.targetUserId }, { projection: { _id: 0 } })

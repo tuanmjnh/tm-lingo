@@ -1,7 +1,7 @@
 {
   "name": "TM-Lingo",
   "description": "Multilingual language-learning platform for children aged 3-5 with decoupled learning content, hybrid experience modes, multilingual story reader, and parent controls.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]

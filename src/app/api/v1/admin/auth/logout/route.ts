@@ -7,6 +7,6 @@ import {
 export async function POST(request: NextRequest) {
   await logoutStaffSession(request);
   const response = NextResponse.json({ ok: true });
-  clearStaffCookies(response);
+  clearStaffCookies(response, request);
   return response;
 }

@@ -10,10 +10,21 @@ const PROTECTED_CORE_VOICES = new Set([
 const DEFAULT_VOICE_SEEDS: VoiceProfile[] = [
   ...VOICE_REGISTRY.map((v) => ({ ...v, archivedAt: null })),
   {
+    voiceId: 'voice-vi-warm',
+    providerId: 'cloud-neural-tts',
+    supportedLocales: ['vi', 'vi-VN'],
+    displayName: 'Minh (Giọng kể ấm áp)',
+    voiceStyleTags: ['warm', 'teacher-like'],
+    ageAppropriate: true,
+    pitch: 0.98,
+    defaultRate: 0.94,
+    archivedAt: null,
+  },
+  {
     voiceId: 'voice-gemini-kore',
     providerId: 'gemini-3.8-flash-lite-tts',
-    supportedLocales: ['en', 'vi'],
-    displayName: 'Kore (Gemini AI Warm Storyteller)',
+    supportedLocales: ['en', 'en-US', 'en-GB', 'en-AU', 'vi', 'vi-VN'],
+    displayName: 'Kore (Warm Storyteller)',
     voiceStyleTags: ['warm', 'calm'],
     ageAppropriate: true,
     pitch: 1.0,
@@ -23,12 +34,45 @@ const DEFAULT_VOICE_SEEDS: VoiceProfile[] = [
   {
     voiceId: 'voice-gemini-zephyr',
     providerId: 'gemini-3.8-flash-lite-tts',
-    supportedLocales: ['en', 'vi'],
-    displayName: 'Zephyr (Gemini AI Gentle Narrator)',
+    supportedLocales: ['en', 'en-US', 'en-GB', 'en-AU', 'vi', 'vi-VN'],
+    displayName: 'Zephyr (Gentle Bedtime Narrator)',
+    voiceStyleTags: ['calm', 'warm'],
+    ageAppropriate: true,
+    pitch: 1.02,
+    defaultRate: 0.88,
+    archivedAt: null,
+  },
+  {
+    voiceId: 'voice-gemini-puck',
+    providerId: 'gemini-3.8-flash-lite-tts',
+    supportedLocales: ['en', 'en-US', 'en-GB', 'en-AU', 'vi', 'vi-VN'],
+    displayName: 'Puck (Playful Teacher)',
+    voiceStyleTags: ['playful', 'teacher-like'],
+    ageAppropriate: true,
+    pitch: 1.05,
+    defaultRate: 0.96,
+    archivedAt: null,
+  },
+  {
+    voiceId: 'voice-gemini-charon',
+    providerId: 'gemini-3.8-flash-lite-tts',
+    supportedLocales: ['en', 'en-US', 'en-GB', 'en-AU', 'vi', 'vi-VN'],
+    displayName: 'Charon (Steady Classic Narrator)',
     voiceStyleTags: ['calm', 'teacher-like'],
     ageAppropriate: true,
-    pitch: 1.0,
+    pitch: 0.96,
     defaultRate: 0.9,
+    archivedAt: null,
+  },
+  {
+    voiceId: 'voice-gemini-fenrir',
+    providerId: 'gemini-3.8-flash-lite-tts',
+    supportedLocales: ['en', 'en-US', 'en-GB', 'en-AU', 'vi', 'vi-VN'],
+    displayName: 'Fenrir (Expressive Adventure Voice)',
+    voiceStyleTags: ['playful', 'warm'],
+    ageAppropriate: true,
+    pitch: 1.0,
+    defaultRate: 0.95,
     archivedAt: null,
   },
 ];
@@ -51,10 +95,16 @@ async function ensureVoicesSeeded(): Promise<void> {
 
   const col = await getMongoCollection<VoiceProfile>('voice_profiles');
   if (!col) return;
-  const count = await col.estimatedDocumentCount();
-  if (count === 0) {
-    await col.insertMany(DEFAULT_VOICE_SEEDS.map((v) => ({ ...v })));
-  }
+  // Insert any newly added built-in voice profiles without modifying existing admin edits
+  await Promise.all(
+    DEFAULT_VOICE_SEEDS.map((voice) =>
+      col.updateOne(
+        { voiceId: voice.voiceId },
+        { $setOnInsert: { ...voice } },
+        { upsert: true }
+      )
+    )
+  );
 }
 
 export async function listVoices(options?: {

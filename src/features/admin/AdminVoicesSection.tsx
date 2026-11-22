@@ -175,12 +175,13 @@ export function AdminVoicesSection({
   const handlePreviewVoice = (voice: VoiceProfile) => {
     const primaryLocale = voice.supportedLocales[0] || 'en';
     const sampleText = primaryLocale.startsWith('vi')
-      ? 'Xin chào bé! Hôm nay chúng ta cùng học từ mới nhé.'
+      ? 'Xin chào bé! Hôm nay chúng ta cùng học từ mới và đọc truyện nhé.'
       : 'Hello little explorer! Let us learn a new word together.';
     speakText({
       text: sampleText,
       locale: primaryLocale,
       rate: voice.defaultRate,
+      voiceProfile: voice,
     });
   };
 

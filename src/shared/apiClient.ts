@@ -53,11 +53,20 @@ export interface SupportedAIProviderMeta {
   docsUrl: string;
 }
 
+// Kept strictly in JS memory (never written to localStorage/sessionStorage)
+// so staff admin requests remain authenticated even inside cross-origin iframes where third-party cookies are restricted.
+let inMemoryStaffAccessToken: string | null = null;
+
 async function buildHeaders(url: string, extra?: HeadersInit): Promise<Headers> {
   const headers = new Headers(extra);
   // Dual Auth Isolation: never attach Firebase Parent Bearer token to /api/v1/admin/*
   const isStaffEndpoint = url.startsWith('/api/v1/admin/');
-  if (!isStaffEndpoint) {
+  if (isStaffEndpoint) {
+    headers.set('X-Requested-With', 'XMLHttpRequest');
+    if (inMemoryStaffAccessToken) {
+      headers.set('Authorization', `Bearer ${inMemoryStaffAccessToken}`);
+    }
+  } else {
     const token = await getParentIdToken();
     if (token) {
       headers.set('Authorization', `Bearer ${token}`);
@@ -72,11 +81,21 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
     headers.set('Content-Type', 'application/json');
   }
 
+  const isStaffEndpoint = url.startsWith('/api/v1/admin/');
   const res = await fetch(url, {
     ...init,
     credentials: 'include',
+    ...(isStaffEndpoint ? { cache: 'no-store' as RequestCache } : {}),
     headers,
   });
+
+  if (isStaffEndpoint) {
+    const refreshed = res.headers.get('X-Staff-Refreshed-Token')?.trim();
+    if (refreshed) {
+      inMemoryStaffAccessToken = refreshed;
+    }
+  }
+
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `Request failed (${res.status})`);
@@ -282,25 +301,41 @@ export const apiClient = {
       }
     ),
 
-  // ---------- Staff Auth (TM-Hub IAM / Local Staff HttpOnly Cookie) ----------
-  staffLogin: (email: string, password: string) =>
-    apiFetch<{ user: AuthUserProfile; iamMode: 'tm-hub' | 'local-dev' }>(
-      '/api/v1/admin/auth/login',
-      {
-        method: 'POST',
-        body: JSON.stringify({ email, password }),
-      }
-    ),
-
-  staffLogout: () =>
-    apiFetch<{ ok: boolean }>('/api/v1/admin/auth/logout', {
+  // ---------- Staff Auth (TM-Hub IAM: Partitioned HttpOnly Cookie + In-Memory Bearer) ----------
+  staffLogin: async (email: string, password: string) => {
+    const res = await apiFetch<{
+      user: AuthUserProfile;
+      iamMode: 'tm-hub' | 'local-dev';
+      accessToken?: string;
+    }>('/api/v1/admin/auth/login', {
       method: 'POST',
-    }),
+      body: JSON.stringify({ email, password }),
+    });
+    inMemoryStaffAccessToken = res.accessToken ?? null;
+    return { user: res.user, iamMode: res.iamMode };
+  },
 
-  getStaffMe: () =>
-    apiFetch<{ user: AuthUserProfile; iamMode: 'tm-hub' | 'local-dev' }>(
-      '/api/v1/admin/auth/me'
-    ),
+  staffLogout: async () => {
+    try {
+      return await apiFetch<{ ok: boolean }>('/api/v1/admin/auth/logout', {
+        method: 'POST',
+      });
+    } finally {
+      inMemoryStaffAccessToken = null;
+    }
+  },
+
+  getStaffMe: async () => {
+    const res = await apiFetch<{
+      user: AuthUserProfile;
+      iamMode: 'tm-hub' | 'local-dev';
+      accessToken?: string;
+    }>('/api/v1/admin/auth/me');
+    if (res.accessToken) {
+      inMemoryStaffAccessToken = res.accessToken;
+    }
+    return { user: res.user, iamMode: res.iamMode };
+  },
 
   // ---------- Staff Users, Roles & Audit Logs ----------
   listAdminUsers: () =>

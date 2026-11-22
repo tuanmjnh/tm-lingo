@@ -8,6 +8,7 @@ import {
   BookOpen,
   Check,
   CheckCircle2,
+  Cloud,
   Eye,
   EyeOff,
   Gamepad2,
@@ -25,10 +26,19 @@ import type {
   LearnerProfile,
   LearningPackageSummary,
   ResolvedLessonPayload,
+  VoiceProfile,
 } from '../../../packages/contracts/types';
 import type { UiMessages } from '../../i18n/messages';
 import { apiClient } from '../../shared/apiClient';
 import { speakText, stopSpeaking } from '../../audio/speechPlayer';
+import { VoiceAccentControls } from '../../components/VoiceAccentControls';
+import {
+  getDefaultAccentForLocale,
+  loadVoiceSelection,
+  pickDefaultVoiceForLocale,
+  saveVoiceSelection,
+  VOICE_PREF_CHANGED_EVENT,
+} from '../../lib/voicePreferences';
 import {
   isSoundEffectsMuted,
   playCelebrationFanfare,
@@ -46,6 +56,14 @@ import {
   enqueueOfflineMutation,
   getCachedContent,
 } from '../../lib/offlineQueue';
+import {
+  getLessonOfflineStatus,
+  getLessonResourceKey,
+  precacheActiveLessonAssets,
+  subscribeOfflineCacheStatus,
+  verifyLessonOfflineReady,
+  type OfflineCacheRecord,
+} from '../../lib/swPrecache';
 import { RENDERER_REGISTRY } from '../../experiences/renderers/ActivityRenderers';
 import {
   MemoryMatchActivity,
@@ -55,6 +73,7 @@ import {
   MascotCompanion,
   type MascotMood,
 } from '../../components/MascotCompanion';
+import { PronunciationPracticeBar } from '../../components/PronunciationPracticeBar';
 
 interface LessonPlayerProps {
   learner: LearnerProfile;
@@ -117,9 +136,84 @@ export function LessonPlayer({
   const [exitHoldProgress, setExitHoldProgress] = useState(0);
   const exitHoldRef = useRef<number | null>(null);
 
+  // Voice & regional accent selector state for LessonPlayer
+  const activeLearningLocale =
+    lesson?.learningLocale || learner.preferences.learningLocale || 'en';
+  const [voices, setVoices] = useState<VoiceProfile[]>([]);
+  const [selectedVoiceId, setSelectedVoiceId] = useState<string>('');
+  const [selectedAccent, setSelectedAccent] = useState<string>(() =>
+    getDefaultAccentForLocale(learner.preferences.learningLocale || 'en')
+  );
+  const [offlineCacheRecord, setOfflineCacheRecord] =
+    useState<OfflineCacheRecord>({
+      status: 'idle',
+      cachedCount: 0,
+      totalCount: 0,
+    });
+
   useEffect(() => {
     setSfxMuted(isSoundEffectsMuted());
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const saved = loadVoiceSelection(learner.id, activeLearningLocale);
+    setSelectedAccent(
+      saved?.accent || getDefaultAccentForLocale(activeLearningLocale)
+    );
+    apiClient
+      .getVoices(activeLearningLocale)
+      .then((res) => {
+        if (cancelled) return;
+        setVoices(res.voices);
+        const savedMatch = saved?.voiceId
+          ? res.voices.find((v) => v.voiceId === saved.voiceId)
+          : null;
+        const preferred =
+          savedMatch ?? pickDefaultVoiceForLocale(res.voices, activeLearningLocale);
+        setSelectedVoiceId(preferred?.voiceId ?? '');
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setVoices([]);
+          setSelectedVoiceId('');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeLearningLocale, learner.id]);
+
+  useEffect(() => {
+    const onVoicePrefChanged = () => {
+      const saved = loadVoiceSelection(learner.id, activeLearningLocale);
+      if (!saved) return;
+      if (saved.accent) setSelectedAccent(saved.accent);
+      if (saved.voiceId) setSelectedVoiceId(saved.voiceId);
+    };
+    window.addEventListener(VOICE_PREF_CHANGED_EVENT, onVoicePrefChanged);
+    return () =>
+      window.removeEventListener(VOICE_PREF_CHANGED_EVENT, onVoicePrefChanged);
+  }, [learner.id, activeLearningLocale]);
+
+  const activeVoice =
+    voices.find((v) => v.voiceId === selectedVoiceId) ?? voices[0] ?? null;
+
+  const handleVoiceChange = (nextVoiceId: string) => {
+    setSelectedVoiceId(nextVoiceId);
+    saveVoiceSelection(learner.id, activeLearningLocale, {
+      voiceId: nextVoiceId,
+      accent: selectedAccent,
+    });
+  };
+
+  const handleAccentChange = (nextAccent: string) => {
+    setSelectedAccent(nextAccent);
+    saveVoiceSelection(learner.id, activeLearningLocale, {
+      voiceId: selectedVoiceId,
+      accent: nextAccent,
+    });
+  };
 
   const stopExitHold = () => {
     if (exitHoldRef.current !== null) {
@@ -171,6 +265,9 @@ export function LessonPlayer({
         setLesson(res.lesson);
         setShowExplanation(res.lesson.preset.showCaptions);
         void cacheContent(cacheKey, res.lesson);
+        const activePkg =
+          packages.find((p) => p.id === res.lesson.lessonId) ?? null;
+        void precacheActiveLessonAssets(res.lesson, activePkg);
       })
       .catch(async (err: Error) => {
         const cached = await getCachedContent<ResolvedLessonPayload>(cacheKey);
@@ -178,6 +275,9 @@ export function LessonPlayer({
         if (cached) {
           setLesson(cached);
           setShowExplanation(cached.preset.showCaptions);
+          const activePkg =
+            packages.find((p) => p.id === cached.lessonId) ?? null;
+          void verifyLessonOfflineReady(cached, activePkg);
         } else {
           setError(err.message);
         }
@@ -198,6 +298,20 @@ export function LessonPlayer({
     learner.preferences.explanationLocale,
     reloadNonce,
   ]);
+
+  const activeLessonKey = lesson ? getLessonResourceKey(lesson) : '';
+
+  useEffect(() => {
+    if (!activeLessonKey) {
+      setOfflineCacheRecord({ status: 'idle', cachedCount: 0, totalCount: 0 });
+      return;
+    }
+    const refresh = () => {
+      setOfflineCacheRecord(getLessonOfflineStatus(activeLessonKey));
+    };
+    refresh();
+    return subscribeOfflineCacheStatus(refresh);
+  }, [activeLessonKey]);
 
   const activeActivity = lesson?.activities[currentIndex] ?? null;
 
@@ -280,14 +394,20 @@ export function LessonPlayer({
       recordWordReplay(
         learner.id,
         activeActivity.conceptId ?? activeActivity.id,
-        text
+        text,
+        locale
       );
     }
+    const useLessonVoice =
+      locale.toLowerCase().split(/[-_]/)[0] ===
+      activeLearningLocale.toLowerCase().split(/[-_]/)[0];
     speakText({
       text,
       locale,
+      accent: useLessonVoice ? selectedAccent : undefined,
       rate: learner.preferences.audioSpeed,
       audioUrl: activeActivity?.spokenAudioUrl,
+      voiceProfile: useLessonVoice ? activeVoice : null,
       onStart: () => setIsSpeaking(true),
       onEnd: () => setIsSpeaking(false),
     });
@@ -497,7 +617,7 @@ export function LessonPlayer({
         } rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 sm:p-8 space-y-6`}
       >
         <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
-          <div>
+          <div className="flex flex-wrap items-center gap-2">
             <p className="text-xs font-medium text-slate-500 dark:text-slate-400 tabular-nums">
               {lesson.title} · {lesson.learningLocale.toUpperCase()} /{' '}
               {lesson.explanationLocale.toUpperCase()} · {messages.player.stepOf}{' '}
@@ -507,6 +627,28 @@ export function LessonPlayer({
                 ? ` · ${isVi ? activeAgeGroup.shortLabels.vi : activeAgeGroup.shortLabels.en}`
                 : ''}
             </p>
+            {offlineCacheRecord.status === 'ready' && (
+              <span
+                role="status"
+                title={
+                  isVi
+                    ? `Đã lưu đủ ${offlineCacheRecord.cachedCount} tài nguyên bài học trên máy — bé có thể học tiếp ngay cả khi mất mạng.`
+                    : `All ${offlineCacheRecord.cachedCount} lesson assets are cached locally — you can keep learning without internet.`
+                }
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50/90 dark:bg-emerald-950/50 text-[11px] font-semibold text-emerald-800 dark:text-emerald-200"
+              >
+                <span className="relative inline-flex items-center justify-center">
+                  <Cloud className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+                  <CheckCircle2
+                    className="w-2.5 h-2.5 text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950 rounded-full -ml-1.5 mt-1.5"
+                    aria-hidden="true"
+                  />
+                </span>
+                <span className="whitespace-nowrap">
+                  {isVi ? 'Sẵn sàng ngoại tuyến' : 'Ready for Offline'}
+                </span>
+              </span>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {memoryItems.length >= 2 && (
@@ -679,6 +821,8 @@ export function LessonPlayer({
             learningLocale={lesson.learningLocale}
             isVi={isVi}
             audioSpeed={learner.preferences.audioSpeed}
+            voiceProfile={activeVoice}
+            accent={selectedAccent}
             preschoolAssist={(learner.ageYears ?? 4) <= 6}
             onComplete={() => {
               const res = recordLearnerActivity(learner.id, {
@@ -781,6 +925,24 @@ export function LessonPlayer({
                 onSpeak={handleSpeak}
                 onSubmitChoice={handleSubmitChoice}
                 onSubmitMatch={handleSubmitMatch}
+              />
+            )}
+
+            {activeActivity?.spokenText && (
+              <PronunciationPracticeBar
+                key={`pronounce-${activeActivity.id}`}
+                targetText={activeActivity.spokenText}
+                spokenLocale={
+                  activeActivity.spokenLocale || activeLearningLocale
+                }
+                accent={selectedAccent}
+                isVi={isVi}
+                onPlayModel={() =>
+                  handleSpeak(
+                    activeActivity.spokenText,
+                    activeActivity.spokenLocale || activeLearningLocale
+                  )
+                }
               />
             )}
 
@@ -937,6 +1099,32 @@ export function LessonPlayer({
                 </button>
               )}
             </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-3">
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                {isVi
+                  ? 'Giọng đọc & Vùng miền'
+                  : 'Voice & Regional Accent'}
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {isVi
+                  ? 'Phụ huynh có thể đổi giọng đọc và ngữ điệu (Mỹ, Anh, Úc...) cho bài học.'
+                  : 'Switch narrator voices and regional accents (US, UK, AU) for this lesson.'}
+              </p>
+            </div>
+            <VoiceAccentControls
+              locale={lesson.learningLocale}
+              interfaceLocale={learner.preferences.interfaceLocale}
+              voices={voices}
+              selectedVoiceId={selectedVoiceId}
+              selectedAccent={selectedAccent}
+              onVoiceChange={handleVoiceChange}
+              onAccentChange={handleAccentChange}
+              rate={learner.preferences.audioSpeed}
+              compact
+            />
           </div>
 
           <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-3">

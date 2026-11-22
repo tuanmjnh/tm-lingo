@@ -1,7 +1,8 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  AlertCircle,
   Bell,
   Cpu,
   FolderOpen,
@@ -10,13 +11,17 @@ import {
   Image as ImageIcon,
   Layers,
   LayoutDashboard,
+  Loader2,
   LogOut,
   Music,
+  Play,
   Rss,
   Search,
   ShieldCheck,
+  Square,
   Upload,
   Users,
+  Volume2,
 } from 'lucide-react';
 import type {
   AgeGroupConfig,
@@ -127,6 +132,125 @@ export function AdminWorkspace({
   const [mediaSearch, setMediaSearch] = useState('');
   const [mediaKindFilter, setMediaKindFilter] = useState<'all' | 'image' | 'audio'>('all');
 
+  // Direct browser audio preview state
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [playingAssetId, setPlayingAssetId] = useState<string | null>(null);
+  const [loadingAssetId, setLoadingAssetId] = useState<string | null>(null);
+  const [previewErrorById, setPreviewErrorById] = useState<Record<string, string>>({});
+
+  const stopAudioPreview = () => {
+    const current = previewAudioRef.current;
+    if (current) {
+      current.onended = null;
+      current.onerror = null;
+      current.onplaying = null;
+      current.pause();
+      current.currentTime = 0;
+      previewAudioRef.current = null;
+    }
+    setPlayingAssetId(null);
+    setLoadingAssetId(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      const current = previewAudioRef.current;
+      if (current) {
+        current.onended = null;
+        current.onerror = null;
+        current.onplaying = null;
+        current.pause();
+        current.currentTime = 0;
+        previewAudioRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (section !== 'media') {
+      const current = previewAudioRef.current;
+      if (current) {
+        current.onended = null;
+        current.onerror = null;
+        current.onplaying = null;
+        current.pause();
+        current.currentTime = 0;
+        previewAudioRef.current = null;
+      }
+      setPlayingAssetId(null);
+      setLoadingAssetId(null);
+    }
+  }, [section]);
+
+  const handleToggleAudioPreview = async (asset: MediaAssetRecord) => {
+    if (playingAssetId === asset.id || loadingAssetId === asset.id) {
+      stopAudioPreview();
+      return;
+    }
+
+    stopAudioPreview();
+    setPreviewErrorById((prev) => {
+      if (!prev[asset.id]) return prev;
+      const next = { ...prev };
+      delete next[asset.id];
+      return next;
+    });
+
+    if (!asset.publicUrl) {
+      setPreviewErrorById((prev) => ({
+        ...prev,
+        [asset.id]: isVi
+          ? 'Không tìm thấy đường dẫn tệp âm thanh.'
+          : 'Audio file URL is unavailable.',
+      }));
+      return;
+    }
+
+    setLoadingAssetId(asset.id);
+    try {
+      const audio = new Audio(asset.publicUrl);
+      audio.preload = 'auto';
+      previewAudioRef.current = audio;
+
+      audio.onplaying = () => {
+        if (previewAudioRef.current === audio) {
+          setLoadingAssetId(null);
+          setPlayingAssetId(asset.id);
+        }
+      };
+      audio.onended = () => {
+        if (previewAudioRef.current === audio) {
+          stopAudioPreview();
+        }
+      };
+      audio.onerror = () => {
+        if (previewAudioRef.current === audio) {
+          stopAudioPreview();
+          setPreviewErrorById((prev) => ({
+            ...prev,
+            [asset.id]: isVi
+              ? 'Không thể phát tệp âm thanh này trên trình duyệt.'
+              : 'Unable to play this audio asset in the browser.',
+          }));
+        }
+      };
+
+      await audio.play();
+      if (previewAudioRef.current === audio) {
+        setLoadingAssetId(null);
+        setPlayingAssetId(asset.id);
+      }
+    } catch {
+      stopAudioPreview();
+      setPreviewErrorById((prev) => ({
+        ...prev,
+        [asset.id]: isVi
+          ? 'Không thể phát bản nghe thử. Vui lòng kiểm tra định dạng tệp.'
+          : 'Could not play audio preview. Check file format or network.',
+      }));
+    }
+  };
+
   const activeMedia = mediaAssets.filter((a) => !a.archivedAt);
   const archivedMedia = mediaAssets.filter((a) => Boolean(a.archivedAt));
   const baseMedia = mediaView === 'active' ? activeMedia : archivedMedia;
@@ -169,6 +293,9 @@ export function AdminWorkspace({
   };
 
   const handleMediaDelete = async (assetId: string, mode: DeleteMode) => {
+    if (playingAssetId === assetId || loadingAssetId === assetId) {
+      stopAudioPreview();
+    }
     setMediaActionId(assetId);
     setMediaError(null);
     setMediaNotice(null);
@@ -599,19 +726,96 @@ export function AdminWorkspace({
                         />
                       </div>
                     ) : (
-                      <div className="rounded-lg bg-slate-50 border border-slate-100 p-3 space-y-2">
-                        <div className="flex items-center gap-2 text-xs font-medium text-slate-600">
-                          <Music
-                            className="w-4 h-4 text-sky-600"
-                            aria-hidden="true"
-                          />
-                          <span>Audio · {asset.locale.toUpperCase()}</span>
+                      <div
+                        className={`rounded-lg border p-3 space-y-2.5 transition-colors ${
+                          playingAssetId === asset.id
+                            ? 'bg-sky-50/70 border-sky-200'
+                            : 'bg-slate-50 border-slate-100'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 text-xs font-medium text-slate-600 min-w-0">
+                            {playingAssetId === asset.id ? (
+                              <Volume2
+                                className="w-4 h-4 text-sky-600 animate-pulse shrink-0"
+                                aria-hidden="true"
+                              />
+                            ) : (
+                              <Music
+                                className="w-4 h-4 text-sky-600 shrink-0"
+                                aria-hidden="true"
+                              />
+                            )}
+                            <span className="truncate">
+                              Audio · {asset.locale.toUpperCase()}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void handleToggleAudioPreview(asset)}
+                            aria-pressed={playingAssetId === asset.id}
+                            aria-label={
+                              playingAssetId === asset.id
+                                ? isVi
+                                  ? `Dừng nghe thử ${asset.title}`
+                                  : `Stop preview for ${asset.title}`
+                                : isVi
+                                  ? `Nghe thử ${asset.title}`
+                                  : `Preview ${asset.title}`
+                            }
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors shrink-0 cursor-pointer ${
+                              playingAssetId === asset.id
+                                ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                                : loadingAssetId === asset.id
+                                  ? 'bg-sky-100 text-sky-700'
+                                  : 'bg-sky-600 text-white hover:bg-sky-700'
+                            }`}
+                          >
+                            {loadingAssetId === asset.id ? (
+                              <>
+                                <Loader2
+                                  className="w-3.5 h-3.5 animate-spin"
+                                  aria-hidden="true"
+                                />
+                                <span>{isVi ? 'Đang tải' : 'Loading'}</span>
+                              </>
+                            ) : playingAssetId === asset.id ? (
+                              <>
+                                <Square
+                                  className="w-3 h-3 fill-current"
+                                  aria-hidden="true"
+                                />
+                                <span>{isVi ? 'Dừng' : 'Stop'}</span>
+                              </>
+                            ) : (
+                              <>
+                                <Play
+                                  className="w-3.5 h-3.5 fill-current"
+                                  aria-hidden="true"
+                                />
+                                <span>{isVi ? 'Nghe thử' : 'Preview'}</span>
+                              </>
+                            )}
+                          </button>
                         </div>
                         <audio
                           controls
                           src={asset.publicUrl}
+                          onPlay={stopAudioPreview}
                           className="w-full h-9"
                         />
+                        {previewErrorById[asset.id] && (
+                          <p
+                            role="alert"
+                            className="flex items-center gap-1.5 text-[11px] font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2 py-1"
+                          >
+                            <AlertCircle
+                              className="w-3.5 h-3.5 shrink-0"
+                              aria-hidden="true"
+                            />
+                            <span>{previewErrorById[asset.id]}</span>
+                          </p>
+                        )}
                       </div>
                     )}
 

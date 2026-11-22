@@ -1,16 +1,20 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { motion } from 'motion/react';
 import {
   ArrowLeft,
   ArrowRight,
   BookOpen,
   Check,
   Clock,
+  Cloud,
   Compass,
   Download,
+  Loader2,
   Moon,
   PlayCircle,
+  Repeat,
   RotateCcw,
   Search,
   Sparkles,
@@ -28,7 +32,11 @@ import type {
 } from '../../../packages/contracts/types';
 import type { UiMessages } from '../../i18n/messages';
 import { apiClient } from '../../shared/apiClient';
-import { speakText, stopSpeaking } from '../../audio/speechPlayer';
+import {
+  prefetchSpeech,
+  speakText,
+  stopSpeaking,
+} from '../../audio/speechPlayer';
 import {
   playCelebrationFanfare,
   playPageTurn,
@@ -43,7 +51,24 @@ import {
   enqueueOfflineMutation,
   getCachedContent,
 } from '../../lib/offlineQueue';
+import {
+  getCachedStoryIds,
+  getStoryOfflineStatus,
+  getStoryResourceKey,
+  precacheStorybookAssets,
+  subscribeOfflineCacheStatus,
+  verifyStoryOfflineReady,
+  type OfflineCacheRecord,
+} from '../../lib/swPrecache';
 import { AssetImage } from '../../components/AssetImage';
+import { VoiceAccentControls } from '../../components/VoiceAccentControls';
+import {
+  getDefaultAccentForLocale,
+  loadVoiceSelection,
+  pickDefaultVoiceForLocale,
+  saveVoiceSelection,
+  VOICE_PREF_CHANGED_EVENT,
+} from '../../lib/voicePreferences';
 import { StorySourceDiscovery } from './StorySourceDiscovery';
 
 interface StoryReaderProps {
@@ -197,32 +222,62 @@ export function StoryReader({
   );
   const [voices, setVoices] = useState<VoiceProfile[]>([]);
   const [selectedVoiceId, setSelectedVoiceId] = useState<string>('');
+  const [selectedAccent, setSelectedAccent] = useState<string>(() =>
+    getDefaultAccentForLocale(learner.preferences.narrationLocale)
+  );
   const [segmentIndex, setSegmentIndex] = useState(0);
   const [speed, setSpeed] = useState(learner.preferences.audioSpeed);
   const [showCaptions, setShowCaptions] = useState(true);
   const [showTranslation, setShowTranslation] = useState(true);
   const [autoAdvance, setAutoAdvance] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isLoadingAudio, setIsLoadingAudio] = useState(false);
   const [savedNotice, setSavedNotice] = useState(false);
 
   // Feature upgrades: Read-along highlight, Interactive Word Pop, Bedtime Mode + Sleep Timer
   const [activeWordIdx, setActiveWordIdx] = useState<number>(-1);
   const [poppedWord, setPoppedWord] = useState<WordPopEntry | null>(null);
   const [bedtimeMode, setBedtimeMode] = useState(false);
-  const [sleepTimerMinutes, setSleepTimerMinutes] = useState<0 | 5 | 10>(0);
+  const [sleepTimerMinutes, setSleepTimerMinutes] = useState<0 | 5 | 10 | 15>(0);
   const [sleepRemainingSec, setSleepRemainingSec] = useState<number>(0);
+  const [bedtimeLoop, setBedtimeLoop] = useState(true);
+  const [sleepFinishedNotice, setSleepFinishedNotice] = useState(false);
+  const [autoAdvanceCountdown, setAutoAdvanceCountdown] = useState<{
+    nextIndex: number;
+    isLoop: boolean;
+  } | null>(null);
   const [storyRewardedId, setStoryRewardedId] = useState<string | null>(null);
+  const [storyOfflineRecord, setStoryOfflineRecord] =
+    useState<OfflineCacheRecord>({
+      status: 'idle',
+      cachedCount: 0,
+      totalCount: 0,
+    });
+  const [cachedStoryIds, setCachedStoryIds] = useState<string[]>([]);
+  const [offlineSaving, setOfflineSaving] = useState(false);
+  const [offlineAudioProgress, setOfflineAudioProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [audioSavedKey, setAudioSavedKey] = useState<string | null>(null);
 
   const autoAdvanceTimerRef = useRef<number | null>(null);
   const highlightIntervalRef = useRef<number | null>(null);
   const autoAdvanceRef = useRef(autoAdvance);
   autoAdvanceRef.current = autoAdvance;
+  const bedtimeLoopRef = useRef(bedtimeLoop);
+  bedtimeLoopRef.current = bedtimeLoop;
+  const sleepRemainingRef = useRef(sleepRemainingSec);
+  sleepRemainingRef.current = sleepRemainingSec;
+  const bedtimeModeRef = useRef(bedtimeMode);
+  bedtimeModeRef.current = bedtimeMode;
 
   const clearAutoTimer = useCallback(() => {
     if (autoAdvanceTimerRef.current !== null) {
       window.clearTimeout(autoAdvanceTimerRef.current);
       autoAdvanceTimerRef.current = null;
     }
+    setAutoAdvanceCountdown(null);
   }, []);
 
   const clearHighlightTimer = useCallback(() => {
@@ -243,6 +298,7 @@ export function StoryReader({
       setSleepRemainingSec(0);
       return;
     }
+    setSleepFinishedNotice(false);
     setSleepRemainingSec(sleepTimerMinutes * 60);
     const id = window.setInterval(() => {
       setSleepRemainingSec((prev) => {
@@ -251,9 +307,11 @@ export function StoryReader({
           clearAutoTimer();
           clearHighlightTimer();
           stopSpeaking();
+          setIsLoadingAudio(false);
           setIsPlaying(false);
           setAutoAdvance(false);
           setSleepTimerMinutes(0);
+          setSleepFinishedNotice(true);
           return 0;
         }
         return prev - 1;
@@ -294,6 +352,7 @@ export function StoryReader({
     clearHighlightTimer();
     setSegmentIndex(0);
     setIsPlaying(false);
+    setIsLoadingAudio(false);
     setPoppedWord(null);
     const storyCacheKey = `story:${activeStoryId}`;
     apiClient
@@ -302,6 +361,17 @@ export function StoryReader({
         if (cancelled) return;
         setStory(res.story);
         void cacheContent(storyCacheKey, res.story);
+        void precacheStorybookAssets(
+          res.story,
+          res.story.availableLocales[0] || learner.preferences.narrationLocale
+        );
+        if (res.story.availableLocales.length > 0) {
+          setNarrationLocale((prev) =>
+            res.story.availableLocales.includes(prev)
+              ? prev
+              : res.story.availableLocales[0]
+          );
+        }
         if (res.readingPosition) {
           setSegmentIndex(
             Math.min(
@@ -326,14 +396,32 @@ export function StoryReader({
     };
   }, [activeStoryId, learner.id, clearAutoTimer, clearHighlightTimer]);
 
+  const effectiveNarrationLocale =
+    story &&
+    story.availableLocales.length > 0 &&
+    !story.availableLocales.includes(narrationLocale)
+      ? story.availableLocales[0]
+      : narrationLocale;
+
   useEffect(() => {
     let cancelled = false;
+    const saved = loadVoiceSelection(learner.id, effectiveNarrationLocale);
+    setSelectedAccent(
+      saved?.accent || getDefaultAccentForLocale(effectiveNarrationLocale)
+    );
+
     apiClient
-      .getVoices(narrationLocale)
+      .getVoices(effectiveNarrationLocale)
       .then((res) => {
         if (cancelled) return;
         setVoices(res.voices);
-        setSelectedVoiceId(res.voices[0]?.voiceId ?? '');
+        const savedMatch = saved?.voiceId
+          ? res.voices.find((v) => v.voiceId === saved.voiceId)
+          : null;
+        const preferred =
+          savedMatch ??
+          pickDefaultVoiceForLocale(res.voices, effectiveNarrationLocale);
+        setSelectedVoiceId(preferred?.voiceId ?? '');
       })
       .catch(() => {
         if (!cancelled) {
@@ -344,7 +432,35 @@ export function StoryReader({
     return () => {
       cancelled = true;
     };
-  }, [narrationLocale]);
+  }, [effectiveNarrationLocale, learner.id]);
+
+  useEffect(() => {
+    const onVoicePrefChanged = () => {
+      const saved = loadVoiceSelection(learner.id, effectiveNarrationLocale);
+      if (!saved) return;
+      if (saved.accent) setSelectedAccent(saved.accent);
+      if (saved.voiceId) setSelectedVoiceId(saved.voiceId);
+    };
+    window.addEventListener(VOICE_PREF_CHANGED_EVENT, onVoicePrefChanged);
+    return () =>
+      window.removeEventListener(VOICE_PREF_CHANGED_EVENT, onVoicePrefChanged);
+  }, [learner.id, effectiveNarrationLocale]);
+
+  const handleVoiceChange = (nextVoiceId: string) => {
+    setSelectedVoiceId(nextVoiceId);
+    saveVoiceSelection(learner.id, effectiveNarrationLocale, {
+      voiceId: nextVoiceId,
+      accent: selectedAccent,
+    });
+  };
+
+  const handleAccentChange = (nextAccent: string) => {
+    setSelectedAccent(nextAccent);
+    saveVoiceSelection(learner.id, effectiveNarrationLocale, {
+      voiceId: selectedVoiceId,
+      accent: nextAccent,
+    });
+  };
 
   const filteredStories = useMemo(() => {
     const q = librarySearch.trim().toLowerCase();
@@ -379,6 +495,12 @@ export function StoryReader({
       return next;
     });
     void cacheContent(`story:${imported.id}`, imported);
+    const preferredImportedLocale =
+      imported.availableLocales.length > 0 &&
+      !imported.availableLocales.includes(narrationLocale)
+        ? imported.availableLocales[0]
+        : narrationLocale;
+    void precacheStorybookAssets(imported, preferredImportedLocale);
     setStory(imported);
     setActiveStoryId(imported.id);
     setSegmentIndex(0);
@@ -403,7 +525,7 @@ export function StoryReader({
   const segment = story ? (story.segments[segmentIndex] ?? story.segments[0]) : null;
   const explanationLocale = learner.preferences.explanationLocale;
   const segmentText = segment
-    ? (segment.textByLocale[narrationLocale] ??
+    ? (segment.textByLocale[effectiveNarrationLocale] ??
       segment.textByLocale.en ??
       Object.values(segment.textByLocale)[0] ??
       '')
@@ -416,12 +538,111 @@ export function StoryReader({
     : '';
   const activeVoice =
     voices.find((v) => v.voiceId === selectedVoiceId) ?? null;
-  const segmentAudioUrl = segment?.audioUrlByLocale?.[narrationLocale];
   const isLastPage = story ? segmentIndex + 1 >= story.segments.length : false;
   const words = useMemo(
     () => (segmentText ? segmentText.split(/\s+/).filter(Boolean) : []),
     [segmentText]
   );
+
+  // Track Service Worker Cache API offline readiness for active story
+  const currentStoryId = story?.id ?? '';
+  const storyRef = useRef<StoryBook | null>(story);
+  storyRef.current = story;
+  const storiesRef = useRef<StoryBook[]>(stories);
+  storiesRef.current = stories;
+
+  useEffect(() => {
+    if (!currentStoryId) {
+      setStoryOfflineRecord({ status: 'idle', cachedCount: 0, totalCount: 0 });
+      return;
+    }
+    const resourceKey = getStoryResourceKey(
+      currentStoryId,
+      effectiveNarrationLocale
+    );
+    const sync = () => {
+      setStoryOfflineRecord(getStoryOfflineStatus(resourceKey));
+    };
+    sync();
+    const currentStory = storyRef.current;
+    if (currentStory && currentStory.id === currentStoryId) {
+      void verifyStoryOfflineReady(currentStory, effectiveNarrationLocale).then(
+        (rec) => {
+          setStoryOfflineRecord(rec);
+        }
+      );
+    }
+    return subscribeOfflineCacheStatus(sync);
+  }, [currentStoryId, effectiveNarrationLocale]);
+
+  // Refresh offline badges across the story library shelf
+  const storiesCount = stories.length;
+  const offlineStatusForList = storyOfflineRecord.status;
+  useEffect(() => {
+    if (storiesCount === 0) return;
+    let cancelled = false;
+    void getCachedStoryIds(storiesRef.current).then((ids) => {
+      if (!cancelled) setCachedStoryIds(ids);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [storiesCount, currentStoryId, offlineStatusForList]);
+
+  const activeStoryAudioKey = currentStoryId
+    ? `${currentStoryId}:${effectiveNarrationLocale}:${selectedVoiceId || 'default'}`
+    : '';
+
+  const handleSaveStoryOffline = async () => {
+    if (!story || offlineSaving) return;
+    setOfflineSaving(true);
+    const totalPages = story.segments.length;
+    setOfflineAudioProgress({ done: 0, total: totalPages });
+
+    try {
+      await cacheContent(`story:${story.id}`, story);
+      await precacheStorybookAssets(story, effectiveNarrationLocale, {
+        force: true,
+      });
+
+      // Prefetch TTS audio for every page into persistent Cache API so narration works offline
+      let done = 0;
+      for (const seg of story.segments) {
+        const text =
+          seg.textByLocale[effectiveNarrationLocale] ??
+          seg.textByLocale.en ??
+          Object.values(seg.textByLocale)[0] ??
+          '';
+        if (text && !seg.audioUrlByLocale?.[effectiveNarrationLocale]) {
+          try {
+            await prefetchSpeech({
+              text,
+              locale: effectiveNarrationLocale,
+              accent: selectedAccent,
+              voiceProfile: activeVoice,
+            });
+          } catch {
+            // continue caching remaining pages
+          }
+        }
+        done += 1;
+        setOfflineAudioProgress({ done, total: totalPages });
+      }
+
+      const verified = await verifyStoryOfflineReady(
+        story,
+        effectiveNarrationLocale
+      );
+      setStoryOfflineRecord(verified);
+      setAudioSavedKey(activeStoryAudioKey);
+      const ids = await getCachedStoryIds(storiesRef.current);
+      setCachedStoryIds(ids);
+      playSuccessChime();
+    } finally {
+      setOfflineSaving(false);
+      setOfflineAudioProgress(null);
+    }
+  };
 
   // Record story completion reward once per story when reaching the final page
   useEffect(() => {
@@ -485,11 +706,18 @@ export function StoryReader({
     }
   };
 
-  const startReadAlongTicker = (text: string, rate: number) => {
+  const startReadAlongTicker = (
+    text: string,
+    rate: number,
+    durationSec?: number
+  ) => {
     clearHighlightTimer();
     const tokens = text.split(/\s+/).filter(Boolean);
     if (tokens.length === 0) return;
-    const msPerWord = Math.max(240, Math.round(420 / Math.max(0.6, rate)));
+    const msPerWord =
+      durationSec && Number.isFinite(durationSec) && durationSec > 0.3
+        ? Math.max(140, Math.round((durationSec * 1000 * 0.92) / tokens.length))
+        : Math.max(220, Math.round(380 / Math.max(0.6, rate)));
     let idx = 0;
     setActiveWordIdx(0);
     highlightIntervalRef.current = window.setInterval(() => {
@@ -507,35 +735,74 @@ export function StoryReader({
     const target = story.segments[idx];
     if (!target) return;
     const text =
-      target.textByLocale[narrationLocale] ??
+      target.textByLocale[effectiveNarrationLocale] ??
       target.textByLocale.en ??
       Object.values(target.textByLocale)[0] ??
       '';
-    const audioUrl = target.audioUrlByLocale?.[narrationLocale];
+    if (!text.trim()) return;
+    const audioUrl = target.audioUrlByLocale?.[effectiveNarrationLocale];
+
+    // Prefetch the next page in background for seamless page turns
+    const nextSeg = story.segments[idx + 1];
+    if (nextSeg && !nextSeg.audioUrlByLocale?.[effectiveNarrationLocale]) {
+      const nextText =
+        nextSeg.textByLocale[effectiveNarrationLocale] ??
+        nextSeg.textByLocale.en ??
+        Object.values(nextSeg.textByLocale)[0] ??
+        '';
+      if (nextText.trim()) {
+        prefetchSpeech({
+          text: nextText,
+          locale: effectiveNarrationLocale,
+          accent: selectedAccent,
+          voiceProfile: activeVoice,
+        });
+      }
+    }
 
     speakText({
       text,
-      locale: narrationLocale,
+      locale: effectiveNarrationLocale,
+      accent: selectedAccent,
       rate: effectiveSpeed,
       audioUrl,
       voiceProfile: activeVoice,
-      onStart: () => {
+      onLoading: () => {
+        setIsLoadingAudio(true);
+      },
+      onStart: (meta) => {
+        setIsLoadingAudio(false);
         setIsPlaying(true);
-        startReadAlongTicker(text, effectiveSpeed);
+        startReadAlongTicker(text, effectiveSpeed, meta?.durationSec);
       },
       onEnd: () => {
+        setIsLoadingAudio(false);
         setIsPlaying(false);
         clearHighlightTimer();
-        if (autoAdvanceRef.current && idx + 1 < story.segments.length) {
+        if (!autoAdvanceRef.current) return;
+        const hasNextPage = idx + 1 < story.segments.length;
+        const shouldBedtimeLoop =
+          !hasNextPage &&
+          bedtimeModeRef.current &&
+          bedtimeLoopRef.current &&
+          sleepRemainingRef.current > 0 &&
+          story.segments.length > 1;
+
+        if (hasNextPage || shouldBedtimeLoop) {
+          const nextIdx = hasNextPage ? idx + 1 : 0;
           clearAutoTimer();
+          setAutoAdvanceCountdown({
+            nextIndex: nextIdx,
+            isLoop: shouldBedtimeLoop,
+          });
           autoAdvanceTimerRef.current = window.setTimeout(() => {
-            const nextIdx = idx + 1;
+            setAutoAdvanceCountdown(null);
             setSegmentIndex(nextIdx);
             setPoppedWord(null);
             playPageTurn();
-            void persistPosition(nextIdx, narrationLocale);
+            void persistPosition(nextIdx, effectiveNarrationLocale);
             playSegmentAt(nextIdx);
-          }, 700);
+          }, 1400);
         }
       },
     });
@@ -543,9 +810,11 @@ export function StoryReader({
 
   const handlePlayToggle = () => {
     clearAutoTimer();
-    if (isPlaying) {
+    setSleepFinishedNotice(false);
+    if (isPlaying || isLoadingAudio) {
       stopSpeaking();
       clearHighlightTimer();
+      setIsLoadingAudio(false);
       setIsPlaying(false);
       return;
     }
@@ -556,11 +825,12 @@ export function StoryReader({
     clearAutoTimer();
     clearHighlightTimer();
     stopSpeaking();
+    setIsLoadingAudio(false);
     setIsPlaying(false);
     setPoppedWord(null);
     setSegmentIndex(nextIndex);
     playPageTurn();
-    void persistPosition(nextIndex, narrationLocale);
+    void persistPosition(nextIndex, effectiveNarrationLocale);
   };
 
   const handleWordTap = (rawToken: string) => {
@@ -575,12 +845,18 @@ export function StoryReader({
       meaningEn: 'Tap Listen Slowly to practice pronouncing this word.',
     };
     setPoppedWord(entry);
-    recordWordReplay(learner.id, `story-word:${normalized}`, entry.word);
+    recordWordReplay(
+      learner.id,
+      `story-word:${normalized}`,
+      entry.word,
+      effectiveNarrationLocale
+    );
     playSuccessChime();
     speakText({
       text: entry.word,
-      locale: narrationLocale,
-      rate: 0.78,
+      locale: effectiveNarrationLocale,
+      accent: selectedAccent,
+      rate: 0.82,
       voiceProfile: activeVoice,
     });
   };
@@ -593,8 +869,13 @@ export function StoryReader({
   const toggleBedtimeMode = () => {
     setBedtimeMode((prev) => {
       const next = !prev;
-      if (next && speed > 0.85) {
-        setSpeed(0.8);
+      if (next) {
+        if (speed > 0.85) setSpeed(0.8);
+        setAutoAdvance(true);
+        setSleepFinishedNotice(false);
+      } else {
+        setSleepTimerMinutes(0);
+        setSleepFinishedNotice(false);
       }
       return next;
     });
@@ -651,6 +932,7 @@ export function StoryReader({
               clearAutoTimer();
               clearHighlightTimer();
               stopSpeaking();
+              setIsLoadingAudio(false);
               setIsPlaying(false);
               setViewTab('discover');
             }}
@@ -842,14 +1124,33 @@ export function StoryReader({
                       >
                         {itemTitle}
                       </p>
-                      {selected && (
-                        <Check
-                          className={`w-4 h-4 shrink-0 ${
-                            bedtimeMode ? 'text-amber-300' : 'text-accent'
-                          }`}
-                          aria-hidden="true"
-                        />
-                      )}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {cachedStoryIds.includes(item.id) && (
+                          <span
+                            title={
+                              isVi
+                                ? 'Đã lưu sẵn để đọc ngoại tuyến'
+                                : 'Cached for offline reading'
+                            }
+                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold ${
+                              bedtimeMode
+                                ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-700/60'
+                                : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/70'
+                            }`}
+                          >
+                            <Cloud className="w-3 h-3" aria-hidden="true" />
+                            <span>Offline</span>
+                          </span>
+                        )}
+                        {selected && (
+                          <Check
+                            className={`w-4 h-4 shrink-0 ${
+                              bedtimeMode ? 'text-amber-300' : 'text-accent'
+                            }`}
+                            aria-hidden="true"
+                          />
+                        )}
+                      </div>
                     </div>
                     <p
                       className={`text-xs line-clamp-2 ${
@@ -889,6 +1190,34 @@ export function StoryReader({
               : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
           }`}
         >
+          {/* Reading Progress Track */}
+          <div
+            className={`h-1.5 w-full ${
+              bedtimeMode
+                ? 'bg-stone-800'
+                : 'bg-slate-100 dark:bg-slate-800'
+            }`}
+            role="progressbar"
+            aria-label={isVi ? 'Tiến độ đọc truyện' : 'Story reading progress'}
+            aria-valuenow={segmentIndex + 1}
+            aria-valuemin={1}
+            aria-valuemax={story.segments.length}
+          >
+            <div
+              className={`h-full transition-all duration-500 ${
+                bedtimeMode
+                  ? 'bg-gradient-to-r from-amber-500 to-amber-300'
+                  : 'bg-gradient-to-r from-sky-500 to-emerald-500'
+              }`}
+              style={{
+                width: `${Math.round(
+                  ((segmentIndex + 1) / Math.max(1, story.segments.length)) *
+                    100
+                )}%`,
+              }}
+            />
+          </div>
+
           <div
             className={`aspect-[16/10] w-full overflow-hidden border-b ${
               bedtimeMode
@@ -919,7 +1248,90 @@ export function StoryReader({
                 {story.titles[narrationLocale] ?? story.titles.en} ·{' '}
                 {messages.story.pageOf} {segmentIndex + 1}/{story.segments.length}
               </span>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-2.5">
+                {offlineSaving && offlineAudioProgress ? (
+                  <span
+                    role="status"
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold tabular-nums ${
+                      bedtimeMode
+                        ? 'border-amber-400/40 bg-stone-800 text-amber-200'
+                        : 'border-sky-200 dark:border-sky-800/70 bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300'
+                    }`}
+                  >
+                    <Loader2
+                      className="w-3.5 h-3.5 animate-spin"
+                      aria-hidden="true"
+                    />
+                    <span>
+                      {isVi
+                        ? `Đang lưu ngoại tuyến (${offlineAudioProgress.done}/${offlineAudioProgress.total} trang)...`
+                        : `Saving offline (${offlineAudioProgress.done}/${offlineAudioProgress.total} pages)...`}
+                    </span>
+                  </span>
+                ) : storyOfflineRecord.status === 'ready' ? (
+                  <div className="inline-flex items-center gap-1.5">
+                    <span
+                      role="status"
+                      title={
+                        isVi
+                          ? 'Tất cả tranh minh họa và nội dung truyện đã sẵn sàng khi không có mạng'
+                          : 'All story pages and illustrations are cached for offline reading'
+                      }
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold ${
+                        bedtimeMode
+                          ? 'border-emerald-700/70 bg-emerald-950/70 text-emerald-300'
+                          : 'border-emerald-200 dark:border-emerald-800/70 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
+                      }`}
+                    >
+                      <Cloud className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                      <Check className="w-3 h-3 -ml-1 shrink-0" aria-hidden="true" />
+                      <span>
+                        {audioSavedKey === activeStoryAudioKey
+                          ? isVi
+                            ? 'Sẵn sàng ngoại tuyến (ảnh + giọng)'
+                            : 'Ready for Offline (Full Audio)'
+                          : isVi
+                            ? 'Sẵn sàng ngoại tuyến'
+                            : 'Ready for Offline'}
+                      </span>
+                    </span>
+                    {audioSavedKey !== activeStoryAudioKey && (
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveStoryOffline()}
+                        title={
+                          isVi
+                            ? 'Tải sẵn toàn bộ giọng đọc các trang để nghe khi mất mạng'
+                            : 'Pre-download narration audio for all pages offline'
+                        }
+                        className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer ${
+                          bedtimeMode
+                            ? 'border-stone-600 bg-stone-800 text-amber-200 hover:bg-stone-700'
+                            : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:border-accent hover:text-accent'
+                        }`}
+                      >
+                        <Download className="w-3 h-3" aria-hidden="true" />
+                        <span>{isVi ? 'Lưu giọng đọc' : 'Save audio'}</span>
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveStoryOffline()}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer ${
+                      bedtimeMode
+                        ? 'border-amber-400/40 bg-stone-800 text-amber-200 hover:bg-stone-700'
+                        : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:border-accent hover:text-accent'
+                    }`}
+                  >
+                    <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>
+                      {isVi ? 'Lưu truyện ngoại tuyến' : 'Save for Offline'}
+                    </span>
+                  </button>
+                )}
+
                 {sleepRemainingSec > 0 && (
                   <span className="inline-flex items-center gap-1 text-amber-300 font-semibold">
                     <Clock className="w-3.5 h-3.5" aria-hidden="true" />
@@ -1061,8 +1473,9 @@ export function StoryReader({
                     onClick={() =>
                       speakText({
                         text: poppedWord.word,
-                        locale: narrationLocale,
-                        rate: 0.75,
+                        locale: effectiveNarrationLocale,
+                        accent: selectedAccent,
+                        rate: 0.78,
                         voiceProfile: activeVoice,
                       })
                     }
@@ -1091,6 +1504,90 @@ export function StoryReader({
               </div>
             )}
 
+            {autoAdvanceCountdown && (
+              <div
+                role="status"
+                className={`rounded-xl border px-3.5 py-2.5 space-y-2 ${
+                  bedtimeMode
+                    ? 'border-amber-500/40 bg-stone-900/90 text-amber-200'
+                    : 'border-sky-200 dark:border-sky-800/70 bg-sky-50/80 dark:bg-sky-950/40 text-sky-900 dark:text-sky-200'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-3 text-xs font-semibold">
+                  <span className="inline-flex items-center gap-1.5">
+                    {autoAdvanceCountdown.isLoop ? (
+                      <Repeat className="w-3.5 h-3.5" aria-hidden="true" />
+                    ) : (
+                      <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+                    )}
+                    <span>
+                      {autoAdvanceCountdown.isLoop
+                        ? isVi
+                          ? 'Đang quay lại trang 1 để kể tiếp cho bé ngủ ngon...'
+                          : 'Gently looping back to page 1 for bedtime...'
+                        : isVi
+                          ? `Đang tự động chuyển sang trang ${autoAdvanceCountdown.nextIndex + 1}...`
+                          : `Turning automatically to page ${autoAdvanceCountdown.nextIndex + 1}...`}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={clearAutoTimer}
+                    className={`px-2 py-0.5 rounded-md text-[11px] font-bold cursor-pointer ${
+                      bedtimeMode
+                        ? 'bg-stone-800 text-amber-200 hover:bg-stone-700'
+                        : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                    }`}
+                  >
+                    {isVi ? 'Dừng lật' : 'Cancel'}
+                  </button>
+                </div>
+                <div
+                  className={`h-1.5 w-full rounded-full overflow-hidden ${
+                    bedtimeMode
+                      ? 'bg-stone-800'
+                      : 'bg-sky-200/70 dark:bg-slate-800'
+                  }`}
+                >
+                  <motion.div
+                    initial={{ width: '0%' }}
+                    animate={{ width: '100%' }}
+                    transition={{ duration: 1.35, ease: 'linear' }}
+                    className={`h-full rounded-full ${
+                      bedtimeMode ? 'bg-amber-400' : 'bg-sky-500'
+                    }`}
+                  />
+                </div>
+              </div>
+            )}
+
+            {sleepFinishedNotice && (
+              <div
+                role="status"
+                className="rounded-xl border border-amber-400/40 bg-stone-900/90 text-amber-100 px-4 py-3 flex items-center justify-between gap-3 text-xs"
+              >
+                <div className="flex items-center gap-2">
+                  <Moon
+                    className="w-4 h-4 text-amber-300 shrink-0"
+                    aria-hidden="true"
+                  />
+                  <span>
+                    {isVi
+                      ? 'Chúc bé ngủ ngon! Đã tự động dừng kể chuyện theo đồng hồ hẹn giờ.'
+                      : 'Sweet dreams! Narration paused automatically as scheduled.'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSleepFinishedNotice(false)}
+                  aria-label={isVi ? 'Đóng thông báo' : 'Dismiss notice'}
+                  className="p-1 rounded-lg text-stone-400 hover:text-amber-200 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            )}
+
             <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
               <button
                 type="button"
@@ -1110,21 +1607,27 @@ export function StoryReader({
 
               <button
                 type="button"
-                disabled={voices.length === 0 && !segmentAudioUrl}
+                disabled={!segmentText.trim()}
                 onClick={handlePlayToggle}
                 className={`inline-flex items-center gap-2 px-6 py-3 min-h-[48px] rounded-xl text-white font-semibold disabled:opacity-40 transition-colors cursor-pointer ${
                   bedtimeMode ? 'bg-amber-600 hover:bg-amber-700' : 'btn-accent'
                 }`}
               >
-                {isPlaying ? (
+                {isLoadingAudio ? (
+                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                ) : isPlaying ? (
                   <Square className="w-4 h-4 fill-current" aria-hidden="true" />
                 ) : (
                   <Volume2 className="w-5 h-5" aria-hidden="true" />
                 )}
                 <span className="whitespace-nowrap">
-                  {isPlaying
-                    ? messages.story.stopAudio
-                    : messages.story.playSegment}
+                  {isLoadingAudio
+                    ? isVi
+                      ? 'Đang chuẩn bị giọng đọc...'
+                      : 'Preparing voice...'
+                    : isPlaying
+                      ? messages.story.stopAudio
+                      : messages.story.playSegment}
                 </span>
               </button>
 
@@ -1253,12 +1756,13 @@ export function StoryReader({
                 {messages.story.narrationLanguage}
               </span>
               <select
-                value={narrationLocale}
+                value={effectiveNarrationLocale}
                 onChange={(e) => {
                   const nextLocale = e.target.value;
                   clearAutoTimer();
                   clearHighlightTimer();
                   stopSpeaking();
+                  setIsLoadingAudio(false);
                   setIsPlaying(false);
                   setNarrationLocale(nextLocale);
                   void persistPosition(segmentIndex, nextLocale);
@@ -1277,38 +1781,19 @@ export function StoryReader({
               </select>
             </label>
 
-            <label className="block space-y-1.5">
-              <span
-                className={`text-xs font-semibold ${
-                  bedtimeMode
-                    ? 'text-stone-300'
-                    : 'text-slate-700 dark:text-slate-300'
-                }`}
-              >
-                {messages.story.voiceSelect}
-              </span>
-              {voices.length > 0 ? (
-                <select
-                  value={selectedVoiceId}
-                  onChange={(e) => setSelectedVoiceId(e.target.value)}
-                  className={`w-full min-h-[44px] rounded-xl border px-3 text-sm focus:outline-none focus:border-sky-500 ${
-                    bedtimeMode
-                      ? 'border-stone-700 bg-stone-900 text-[#F5EFE6]'
-                      : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100'
-                  }`}
-                >
-                  {voices.map((voice) => (
-                    <option key={voice.voiceId} value={voice.voiceId}>
-                      {voice.displayName} · {voice.voiceStyleTags.join(', ')}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <p className="text-xs text-amber-600 dark:text-amber-400">
-                  {messages.story.noVoiceAvailable}
-                </p>
-              )}
-            </label>
+            <VoiceAccentControls
+              locale={effectiveNarrationLocale}
+              interfaceLocale={learner.preferences.interfaceLocale}
+              voices={voices}
+              selectedVoiceId={selectedVoiceId}
+              selectedAccent={selectedAccent}
+              onVoiceChange={handleVoiceChange}
+              onAccentChange={handleAccentChange}
+              rate={effectiveSpeed}
+              bedtimeMode={bedtimeMode}
+              voiceLabel={messages.story.voiceSelect}
+              emptyNotice={messages.story.noVoiceAvailable}
+            />
 
             <div className="space-y-1.5">
               <div
@@ -1333,20 +1818,36 @@ export function StoryReader({
             </div>
 
             {bedtimeMode && (
-              <div className="rounded-xl border border-stone-700 bg-stone-900/70 p-3 space-y-2">
-                <span className="text-xs font-semibold text-amber-200 inline-flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>
-                    {isVi ? 'Hẹn giờ tự động tắt kể chuyện' : 'Bedtime auto-stop timer'}
+              <div className="rounded-xl border border-stone-700 bg-stone-900/70 p-3.5 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-amber-200 inline-flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>
+                      {isVi
+                        ? 'Hẹn giờ tự động tắt kể chuyện'
+                        : 'Bedtime sleep timer'}
+                    </span>
                   </span>
-                </span>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {([0, 5, 10] as const).map((mins) => (
+                  {sleepRemainingSec > 0 && (
+                    <span className="text-xs font-extrabold text-amber-300 tabular-nums">
+                      {formatTimer(sleepRemainingSec)}
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-4 gap-1.5">
+                  {([0, 5, 10, 15] as const).map((mins) => (
                     <button
                       key={mins}
                       type="button"
-                      onClick={() => setSleepTimerMinutes(mins)}
-                      className={`py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
+                      onClick={() => {
+                        setSleepTimerMinutes(mins);
+                        if (mins > 0) {
+                          setAutoAdvance(true);
+                          setSleepFinishedNotice(false);
+                        }
+                      }}
+                      className={`py-1.5 px-1 rounded-lg text-xs font-semibold tabular-nums transition-colors cursor-pointer ${
                         sleepTimerMinutes === mins
                           ? 'bg-amber-600 text-white'
                           : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
@@ -1354,12 +1855,47 @@ export function StoryReader({
                     >
                       {mins === 0
                         ? isVi
-                          ? 'Hết truyện'
-                          : 'End of book'
-                        : `${mins} ${isVi ? 'phút' : 'min'}`}
+                          ? 'Tắt'
+                          : 'Off'
+                        : `${mins}${isVi ? 'p' : 'm'}`}
                     </button>
                   ))}
                 </div>
+
+                {sleepTimerMinutes > 0 && sleepRemainingSec > 0 && (
+                  <div className="space-y-2">
+                    <div className="h-1.5 w-full rounded-full bg-stone-800 overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-amber-500 to-amber-300 transition-all duration-1000"
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            Math.round(
+                              (sleepRemainingSec / (sleepTimerMinutes * 60)) *
+                                100
+                            )
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                    <label className="flex items-center justify-between gap-2 text-xs text-stone-300 cursor-pointer">
+                      <span className="inline-flex items-center gap-1.5">
+                        <Repeat className="w-3.5 h-3.5 text-amber-300" aria-hidden="true" />
+                        <span>
+                          {isVi
+                            ? 'Lặp lại nhẹ nhàng đến khi hết giờ'
+                            : 'Gently loop story until timer ends'}
+                        </span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={bedtimeLoop}
+                        onChange={(e) => setBedtimeLoop(e.target.checked)}
+                        className="w-4 h-4 accent-amber-500"
+                      />
+                    </label>
+                  </div>
+                )}
               </div>
             )}
 
