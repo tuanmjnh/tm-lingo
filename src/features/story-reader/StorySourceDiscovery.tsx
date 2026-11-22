@@ -29,6 +29,7 @@ interface StorySourceDiscoveryProps {
   interfaceLocale: string;
   ageGroups: AgeGroupConfig[];
   initialAgeBand?: string;
+  defaultFormat?: 'all' | 'audiobook' | 'picture_book';
   bedtimeMode?: boolean;
   onStoryImported: (story: StoryBook) => void;
   onOpenExistingStory: (storyId: string) => void;
@@ -44,6 +45,7 @@ export function StorySourceDiscovery({
   interfaceLocale,
   ageGroups,
   initialAgeBand,
+  defaultFormat = 'all',
   bedtimeMode = false,
   onStoryImported,
   onOpenExistingStory,
@@ -61,18 +63,20 @@ export function StorySourceDiscovery({
   const [selectedCategory, setSelectedCategory] = useState<
     StoryCategoryKey | 'all'
   >('all');
-  const [selectedAgeBand, setSelectedAgeBand] = useState<string>(
-    initialAgeBand || 'all'
-  );
+  const [selectedAgeBand, setSelectedAgeBand] = useState<string>('all');
   const [selectedLocale, setSelectedLocale] = useState<string>('all');
+  const [selectedFormat, setSelectedFormat] = useState<
+    'all' | 'audiobook' | 'picture_book'
+  >(defaultFormat);
   const [searchInput, setSearchInput] = useState<string>('');
   const [activeQuery, setActiveQuery] = useState<string>('');
 
   useEffect(() => {
-    if (initialAgeBand) {
-      setSelectedAgeBand(initialAgeBand);
-    }
-  }, [initialAgeBand]);
+    setSelectedFormat(defaultFormat);
+  }, [defaultFormat]);
+
+  // Keep initialAgeBand accessible via dropdown while defaulting to 'all' so every live audiobook source is visible immediately
+  void initialAgeBand;
 
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -203,8 +207,8 @@ export function StorySourceDiscovery({
               />
               <span>
                 {isVi
-                  ? 'Khám phá & tải truyện kể theo danh mục'
-                  : 'Discover & download stories by category'}
+                  ? 'Khám phá & tải Sách nói, Truyện dài từ các nguồn mở'
+                  : 'Discover & download Audiobooks & Long Stories'}
               </span>
             </h3>
             <p
@@ -215,8 +219,8 @@ export function StorySourceDiscovery({
               }`}
             >
               {isVi
-                ? 'Chọn chủ đề hoặc tìm theo từ khóa từ các nguồn truyện đã bật. Thích truyện nào, chạm "Tải về & Đọc" để lưu vào kệ đọc ngay.'
-                : 'Browse categories or search across enabled storytelling sources. Tap "Download & Read" on any story to save it to your bookshelf.'}
+                ? 'Kết nối trực tiếp Kho Song ngữ TM-Lingo, Sách nói MP3 LibriVox, Kho Cổ tích Tiếng Việt Wikisource & Internet Archive — nghe đọc tự do không giới hạn thời gian.'
+                : 'Connected live to TM-Lingo Bilingual Library, LibriVox MP3 Audiobooks, Vietnamese Wikisource & Internet Archive — unlimited listening anytime.'}
             </p>
           </div>
 
@@ -355,6 +359,34 @@ export function StorySourceDiscovery({
             </button>
           ))}
         </div>
+
+        {/* Format Quick Filter */}
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          {(
+            [
+              ['all', isVi ? 'Tất cả định dạng' : 'All formats'],
+              ['audiobook', isVi ? 'Sách nói & Truyện dài' : 'Audiobooks & Long Stories'],
+              ['picture_book', isVi ? 'Truyện tranh ngắn' : 'Short Picture Stories'],
+            ] as const
+          ).map(([fmtKey, label]) => (
+            <button
+              key={fmtKey}
+              type="button"
+              onClick={() => setSelectedFormat(fmtKey)}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-colors cursor-pointer ${
+                selectedFormat === fmtKey
+                  ? bedtimeMode
+                    ? 'border-amber-400 bg-amber-950/70 text-amber-200'
+                    : 'border-accent bg-accent-soft'
+                  : bedtimeMode
+                    ? 'border-stone-700 bg-stone-900 text-stone-300'
+                    : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </section>
 
       {/* Feedback & Source Warnings */}
@@ -438,7 +470,40 @@ export function StorySourceDiscovery({
             {isVi ? 'Đặt lại bộ lọc' : 'Reset filters'}
           </button>
         </div>
-      ) : (
+      ) : (() => {
+        const visibleItems = items.filter((it) => {
+          const isLong =
+            it.storyFormat === 'audiobook' ||
+            it.storyFormat === 'long_story' ||
+            Boolean(it.hasAudio);
+          if (selectedFormat === 'audiobook') return isLong;
+          if (selectedFormat === 'picture_book') return !isLong;
+          return true;
+        });
+
+        if (visibleItems.length === 0) {
+          return (
+            <div
+              className={`rounded-2xl border p-8 text-center space-y-2 ${surfaceCard}`}
+            >
+              <BookOpen className="w-8 h-8 mx-auto text-slate-400" aria-hidden="true" />
+              <p className="text-sm font-bold">
+                {isVi
+                  ? 'Không có sách/truyện nào khớp định dạng đang lọc'
+                  : 'No items matched this format filter'}
+              </p>
+              <button
+                type="button"
+                onClick={() => setSelectedFormat('all')}
+                className="mt-2 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-sky-600 text-white text-xs font-semibold hover:bg-sky-700 cursor-pointer"
+              >
+                {isVi ? 'Xem tất cả định dạng' : 'Show all formats'}
+              </button>
+            </div>
+          );
+        }
+
+        return (
         <div className="space-y-3">
           <p
             className={`text-xs font-semibold ${
@@ -446,11 +511,11 @@ export function StorySourceDiscovery({
             }`}
           >
             {isVi
-              ? `Tìm thấy ${items.length} truyện sẵn sàng tải về`
-              : `Found ${items.length} stories ready to download`}
+              ? `Tìm thấy ${visibleItems.length} sách nói & truyện sẵn sàng tải về`
+              : `Found ${visibleItems.length} audiobooks & stories ready to download`}
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {items.map((item) => {
+            {visibleItems.map((item) => {
               const cardKey = `${item.sourceId}:${item.externalId}`;
               const isImporting = importingKey === cardKey;
               const isDownloaded = Boolean(item.alreadyImportedStoryId);
@@ -475,12 +540,22 @@ export function StorySourceDiscovery({
                         <span className="px-2 py-0.5 rounded-lg bg-slate-900/80 text-white text-[11px] font-semibold">
                           {getCategoryLabel(item.category)}
                         </span>
-                        {item.hasAudio && (
+                        {item.storyFormat === 'audiobook' ? (
+                          <span className="px-2 py-0.5 rounded-lg bg-amber-600 text-white text-[11px] font-semibold inline-flex items-center gap-1">
+                            <Headphones className="w-3 h-3" aria-hidden="true" />
+                            <span>{isVi ? 'Sách nói MP3' : 'MP3 Audio'}</span>
+                          </span>
+                        ) : item.storyFormat === 'long_story' ? (
+                          <span className="px-2 py-0.5 rounded-lg bg-sky-600 text-white text-[11px] font-semibold inline-flex items-center gap-1">
+                            <BookOpen className="w-3 h-3" aria-hidden="true" />
+                            <span>{isVi ? 'Truyện dài' : 'Long Story'}</span>
+                          </span>
+                        ) : item.hasAudio ? (
                           <span className="px-2 py-0.5 rounded-lg bg-amber-500 text-white text-[11px] font-semibold inline-flex items-center gap-1">
                             <Headphones className="w-3 h-3" aria-hidden="true" />
                             <span>Audio</span>
                           </span>
-                        )}
+                        ) : null}
                       </div>
                       {isDownloaded && (
                         <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold inline-flex items-center gap-1">
@@ -544,7 +619,9 @@ export function StorySourceDiscovery({
                       }`}
                     >
                       <span>
-                        {isVi ? 'Độ tuổi:' : 'Ages:'} {item.ageBands.join(', ')}
+                        {item.chapterCount
+                          ? `${item.chapterCount} ${isVi ? 'chương' : 'chapters'}`
+                          : `${isVi ? 'Độ tuổi:' : 'Ages:'} ${item.ageBands.join(', ')}`}
                       </span>
                       {item.estimatedMinutes && (
                         <span className="inline-flex items-center gap-1 tabular-nums">
@@ -572,21 +649,21 @@ export function StorySourceDiscovery({
                             aria-hidden="true"
                           />
                           <span>
-                            {isVi ? 'Đang tải truyện...' : 'Downloading...'}
+                            {isVi ? 'Đang tải về kệ...' : 'Downloading...'}
                           </span>
                         </>
                       ) : isDownloaded ? (
                         <>
-                          <BookOpen className="w-4 h-4" aria-hidden="true" />
+                          <Headphones className="w-4 h-4" aria-hidden="true" />
                           <span>
-                            {isVi ? 'Mở đọc ngay' : 'Open & Read'}
+                            {isVi ? 'Mở nghe & đọc ngay' : 'Open & Listen'}
                           </span>
                         </>
                       ) : (
                         <>
                           <Download className="w-4 h-4" aria-hidden="true" />
                           <span>
-                            {isVi ? 'Tải về & Đọc ngay' : 'Download & Read'}
+                            {isVi ? 'Tải về & Nghe ngay' : 'Download & Listen'}
                           </span>
                         </>
                       )}
@@ -597,7 +674,8 @@ export function StorySourceDiscovery({
             })}
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

@@ -11,6 +11,8 @@ import {
   Clock,
   Globe,
   GraduationCap,
+  Headphones,
+  Home,
   Layers,
   Settings,
   Sparkles,
@@ -74,19 +76,20 @@ import { LandingHomepage } from './components/LandingHomepage';
 import { LearnerOnboardingFlow } from './components/LearnerOnboardingFlow';
 import { BrandLogo } from './components/BrandLogo';
 import { AppLoadingScreen } from './components/AppLoadingScreen';
+import { FamilyHomeDashboard } from './features/home/FamilyHomeDashboard';
 import { LessonPlayer } from './features/lesson-player/LessonPlayer';
 import { StoryReader } from './features/story-reader/StoryReader';
 import { ParentPanel } from './features/parent/ParentPanel';
 import { AdminWorkspace } from './features/admin/AdminWorkspace';
 import { AdminLoginView } from './features/admin/AdminLoginView';
 
-type AppTab = 'learn' | 'stories' | 'parents' | 'admin';
+type AppTab = 'home' | 'learn' | 'stories' | 'audiobooks' | 'parents' | 'admin';
 
 interface AppProps {
   initialTab?: AppTab;
 }
 
-export function App({ initialTab = 'learn' }: AppProps) {
+export function App({ initialTab = 'home' }: AppProps) {
   const router = useRouter();
   const pathname = usePathname();
   const [activeTab, setActiveTab] = useState<AppTab>(initialTab);
@@ -113,14 +116,27 @@ export function App({ initialTab = 'learn' }: AppProps) {
       setActiveTab('admin');
       return;
     }
-    if (pathSegment === 'stories' || pathSegment === 'parents' || pathSegment === 'learn') {
+    if (
+      pathSegment === 'home' ||
+      pathSegment === 'learn' ||
+      pathSegment === 'stories' ||
+      pathSegment === 'audiobooks' ||
+      pathSegment === 'parents'
+    ) {
       setActiveTab(pathSegment as AppTab);
       return;
     }
     const param = typeof window !== 'undefined'
       ? new URLSearchParams(window.location.search).get('tab')
       : null;
-    if (param === 'stories' || param === 'parents' || param === 'admin' || param === 'learn') {
+    if (
+      param === 'home' ||
+      param === 'learn' ||
+      param === 'stories' ||
+      param === 'audiobooks' ||
+      param === 'parents' ||
+      param === 'admin'
+    ) {
       setActiveTab(param as AppTab);
     }
   }, [initialTab, pathname]);
@@ -131,14 +147,27 @@ export function App({ initialTab = 'learn' }: AppProps) {
       const pathSegment = window.location.pathname.replace(/^\/+/, '').split('/')[0];
       if (pathSegment === 'admin') {
         setActiveTab('admin');
-      } else if (pathSegment === 'stories' || pathSegment === 'parents' || pathSegment === 'learn') {
+      } else if (
+        pathSegment === 'home' ||
+        pathSegment === 'learn' ||
+        pathSegment === 'stories' ||
+        pathSegment === 'audiobooks' ||
+        pathSegment === 'parents'
+      ) {
         setActiveTab(pathSegment as AppTab);
       } else {
         const param = new URLSearchParams(window.location.search).get('tab');
-        if (param === 'stories' || param === 'parents' || param === 'admin' || param === 'learn') {
+        if (
+          param === 'home' ||
+          param === 'learn' ||
+          param === 'stories' ||
+          param === 'audiobooks' ||
+          param === 'parents' ||
+          param === 'admin'
+        ) {
           setActiveTab(param as AppTab);
         } else {
-          setActiveTab('learn');
+          setActiveTab('home');
         }
       }
     };
@@ -229,6 +258,8 @@ export function App({ initialTab = 'learn' }: AppProps) {
   const [lastSyncedCount, setLastSyncedCount] = useState(0);
   const [dailyUsedSeconds, setDailyUsedSeconds] = useState(0);
   const [extraMinutesGranted, setExtraMinutesGranted] = useState(0);
+  const [storyDailyUsedSeconds, setStoryDailyUsedSeconds] = useState(0);
+  const [extraStoryMinutesGranted, setExtraStoryMinutesGranted] = useState(0);
 
   // Interactive UX overlays: Kid Focus Mode, Sticker Book, Parental Gate
   const [kidFocusMode, setKidFocusMode] = useState(false);
@@ -483,18 +514,24 @@ export function App({ initialTab = 'learn' }: AppProps) {
     };
   }, [activeLearnerId, refreshProgress]);
 
-  // Gentle daily learning time limit tracker per learner per day
+  // Independent daily time trackers: Learn (timed) + Picture Stories (timed separately).
+  // Audiobooks & Long Stories remain 100% unlimited!
   useEffect(() => {
     if (!activeLearnerId || typeof window === 'undefined') return;
     const today = new Date().toISOString().slice(0, 10);
-    const storageKey = `tm_lingo_usage_${today}_${activeLearnerId}`;
+    const learnKey = `tm_lingo_usage_${today}_${activeLearnerId}`;
+    const storyKey = `tm_lingo_story_usage_${today}_${activeLearnerId}`;
     try {
-      const stored = Number(window.localStorage.getItem(storageKey) || '0');
-      setDailyUsedSeconds(Number.isFinite(stored) ? stored : 0);
+      const storedLearn = Number(window.localStorage.getItem(learnKey) || '0');
+      setDailyUsedSeconds(Number.isFinite(storedLearn) ? storedLearn : 0);
+      const storedStory = Number(window.localStorage.getItem(storyKey) || '0');
+      setStoryDailyUsedSeconds(Number.isFinite(storedStory) ? storedStory : 0);
     } catch {
       setDailyUsedSeconds(0);
+      setStoryDailyUsedSeconds(0);
     }
     setExtraMinutesGranted(0);
+    setExtraStoryMinutesGranted(0);
   }, [activeLearnerId]);
 
   useEffect(() => {
@@ -506,9 +543,15 @@ export function App({ initialTab = 'learn' }: AppProps) {
       return;
     }
     const today = new Date().toISOString().slice(0, 10);
-    const storageKey = `tm_lingo_usage_${today}_${activeLearnerId}`;
+    const isStoryTimer = activeTab === 'stories';
+    const storageKey = isStoryTimer
+      ? `tm_lingo_story_usage_${today}_${activeLearnerId}`
+      : `tm_lingo_usage_${today}_${activeLearnerId}`;
     const timer = window.setInterval(() => {
-      setDailyUsedSeconds((prev) => {
+      const updateFn = isStoryTimer
+        ? setStoryDailyUsedSeconds
+        : setDailyUsedSeconds;
+      updateFn((prev) => {
         const next = prev + 15;
         try {
           window.localStorage.setItem(storageKey, String(next));
@@ -648,7 +691,7 @@ export function App({ initialTab = 'learn' }: AppProps) {
       setLearners([]);
       setActiveLearnerId('');
       setProgressRecords([]);
-      setActiveTab('learn');
+      setActiveTab('home');
     } catch (err) {
       setParentAuthError(err instanceof Error ? err.message : 'Sign-out failed');
     } finally {
@@ -679,7 +722,7 @@ export function App({ initialTab = 'learn' }: AppProps) {
       await apiClient.staffLogout();
       setStaffUser(null);
       setMediaAssets([]);
-      setActiveTab('learn');
+      setActiveTab('home');
       if (typeof window !== 'undefined' && window.location.pathname !== '/') {
         window.history.pushState(null, '', '/');
       }
@@ -788,7 +831,7 @@ export function App({ initialTab = 'learn' }: AppProps) {
   };
 
   const scrollToLessonStage = () => {
-    setActiveTab('learn');
+    navigateTab('learn');
     setTimeout(() => {
       document
         .getElementById('lesson-stage')
@@ -798,7 +841,7 @@ export function App({ initialTab = 'learn' }: AppProps) {
 
   const leaveAdminToHome = () => {
     setKidFocusMode(false);
-    setActiveTab('learn');
+    setActiveTab('home');
     if (typeof window !== 'undefined' && window.location.pathname !== '/') {
       window.history.pushState(null, '', '/');
     }
@@ -816,7 +859,7 @@ export function App({ initialTab = 'learn' }: AppProps) {
     }
     setActiveTab(tab);
     if (typeof window !== 'undefined') {
-      const targetPath = tab === 'learn' ? '/' : `/${tab}`;
+      const targetPath = tab === 'home' ? '/' : `/${tab}`;
       if (window.location.pathname !== targetPath) {
         window.history.pushState(null, '', targetPath);
       }
@@ -879,6 +922,46 @@ export function App({ initialTab = 'learn' }: AppProps) {
   const isDailyLimitReached =
     Boolean(activeLearner) && dailyUsedMinutes >= dailyLimitMinutes;
 
+  const storyDailyLimitMinutes =
+    (activeLearner?.preferences.storyDailyMinutesLimit ?? 15) +
+    extraStoryMinutesGranted;
+  const storyDailyUsedMinutes = Math.floor(storyDailyUsedSeconds / 60);
+  const isStoryLimitReached =
+    Boolean(activeLearner) && storyDailyUsedMinutes >= storyDailyLimitMinutes;
+
+  // Per-child daily usage snapshot for the Family Home Dashboard
+  const dailyUsedMinutesMap: Record<string, number> = {};
+  const storyUsedMinutesMap: Record<string, number> = {};
+  if (typeof window !== 'undefined') {
+    const todayIso = new Date().toISOString().slice(0, 10);
+    for (const child of learners) {
+      if (child.id === activeLearner?.id) {
+        dailyUsedMinutesMap[child.id] = dailyUsedMinutes;
+        storyUsedMinutesMap[child.id] = storyDailyUsedMinutes;
+      } else {
+        try {
+          const lSec = Number(
+            window.localStorage.getItem(`tm_lingo_usage_${todayIso}_${child.id}`) || '0'
+          );
+          const sSec = Number(
+            window.localStorage.getItem(
+              `tm_lingo_story_usage_${todayIso}_${child.id}`
+            ) || '0'
+          );
+          dailyUsedMinutesMap[child.id] = Number.isFinite(lSec)
+            ? Math.floor(lSec / 60)
+            : 0;
+          storyUsedMinutesMap[child.id] = Number.isFinite(sSec)
+            ? Math.floor(sSec / 60)
+            : 0;
+        } catch {
+          dailyUsedMinutesMap[child.id] = 0;
+          storyUsedMinutesMap[child.id] = 0;
+        }
+      }
+    }
+  }
+
   // Record daily goal completion & trigger celebratory 100% overlay once per learner/day/goal milestone
   const activeLearnerIdForGoal = activeLearner?.id ?? '';
   useEffect(() => {
@@ -915,8 +998,10 @@ export function App({ initialTab = 'learn' }: AppProps) {
       : 0;
 
   const navItems: Array<[AppTab, string]> = [
+    ['home', messages.nav.home],
     ['learn', messages.nav.learn],
     ['stories', messages.nav.stories],
+    ['audiobooks', messages.nav.audiobooks],
     ['parents', messages.nav.parents],
   ];
 
@@ -927,13 +1012,13 @@ export function App({ initialTab = 'learn' }: AppProps) {
 
   return (
     <div
-      className={`min-h-screen flex flex-col bg-[#F8FAFC] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F1F5F9] transition-colors ${
+      className={`min-h-screen flex flex-col bg-[#F6F8FB] dark:bg-[#090E1A] text-[#0F172A] dark:text-[#F1F5F9] transition-colors ${
         hasAuthenticatedWorkspace && !isFocusStage ? 'pb-16 md:pb-0' : ''
       } ${effectiveReducedMotion ? 'reduced-motion' : ''}`}
     >
-      {/* Top Bar — 3-Zone Contract: Brand Wordmark | Single-line Nav | Settings Gear + Primary Action */}
+      {/* Top Bar — 3-Zone Contract: Brand Wordmark | 5 Single-line Nav Links | Primary CTA + Notification + Settings */}
       {!isFocusStage && (
-        <header className="sticky top-0 z-20 bg-white/95 dark:bg-[#0B1120]/90 backdrop-blur border-b border-slate-200 dark:border-slate-800 transition-colors">
+        <header className="sticky top-0 z-20 bg-white/92 dark:bg-[#090E1A]/90 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/90 transition-colors">
           <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4 sm:gap-6">
             <button
               type="button"
@@ -1139,25 +1224,73 @@ export function App({ initialTab = 'learn' }: AppProps) {
             }}
           />
         ) : (
-          /* State 3: Authenticated Workspace with Age-Matched Curriculum */
+          /* State 3: Authenticated Workspace with Family Home, Timed Lessons, Timed Stories, and Unlimited Audiobooks */
           <>
-            {(activeTab === 'learn' || activeTab === 'stories') &&
-            isDailyLimitReached ? (
-              <section className="max-w-xl mx-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-8 sm:p-10 text-center space-y-5">
+            {activeTab === 'home' && parentUser && (
+              <FamilyHomeDashboard
+                parentUser={parentUser}
+                learners={learners}
+                activeLearner={activeLearner}
+                ageGroups={ageGroups}
+                languages={languages}
+                packages={packages}
+                activeLearnerProgress={progressRecords}
+                dailyUsedMinutesMap={dailyUsedMinutesMap}
+                storyUsedMinutesMap={storyUsedMinutesMap}
+                interfaceLocale={currentInterfaceLocale}
+                quickInterfaceLocales={quickInterfaceLocales}
+                messages={messages}
+                reducedMotion={effectiveReducedMotion}
+                onSelectLearner={setActiveLearnerId}
+                onNavigateTab={navigateTab}
+                onChangeInterfaceLocale={handleChangeInterfaceLocale}
+                onOpenStickerBook={() => setStickerBookOpen(true)}
+                onOpenWordReview={() => setWordReviewOpen(true)}
+              />
+            )}
+
+            {activeTab === 'learn' && isDailyLimitReached ? (
+              <section className="max-w-xl mx-auto surface-card rounded-2xl p-8 sm:p-10 text-center space-y-5">
                 <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-amber-50 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400">
                   <Sun className="w-8 h-8" aria-hidden="true" />
                 </div>
                 <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-slate-50">
                   {currentInterfaceLocale === 'vi'
-                    ? `Hôm nay ${activeLearner.nickname} đã học thật giỏi rồi!`
-                    : `Great learning today, ${activeLearner.nickname}!`}
+                    ? `Hôm nay ${activeLearner.nickname} đã hoàn thành giờ học bài!`
+                    : `Great lesson time today, ${activeLearner.nickname}!`}
                 </h2>
                 <p className="text-base text-slate-600 dark:text-slate-300 leading-relaxed">
                   {currentInterfaceLocale === 'vi'
-                    ? `Học viên đã hoàn thành đủ ${dailyLimitMinutes} phút học hôm nay. Hãy cho đôi mắt nghỉ ngơi, uống nước hoặc thư giãn một chút nhé.`
-                    : `You reached today's gentle ${dailyLimitMinutes}-minute learning goal. Time to rest your eyes, stretch, and recharge!`}
+                    ? `Bé đã hoàn thành đủ ${dailyLimitMinutes} phút học bài hôm nay. Bé có thể chuyển sang nghe Sách nói (không giới hạn thời gian) hoặc đọc Truyện kể nếu còn thời lượng nhé.`
+                    : `You reached today's ${dailyLimitMinutes}-minute lesson limit. Enjoy unlimited Audiobooks anytime or switch to Picture Stories if time remains.`}
                 </p>
                 <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => navigateTab('audiobooks')}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 min-h-[44px] rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition-colors cursor-pointer"
+                  >
+                    <Headphones className="w-4 h-4" aria-hidden="true" />
+                    <span>
+                      {currentInterfaceLocale === 'vi'
+                        ? 'Nghe Sách nói (Không giới hạn)'
+                        : 'Listen to Audiobooks (Unlimited)'}
+                    </span>
+                  </button>
+                  {!isStoryLimitReached && (
+                    <button
+                      type="button"
+                      onClick={() => navigateTab('stories')}
+                      className="inline-flex items-center gap-2 px-5 py-2.5 min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer"
+                    >
+                      <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400" aria-hidden="true" />
+                      <span>
+                        {currentInterfaceLocale === 'vi'
+                          ? `Đọc Truyện kể (${storyDailyLimitMinutes - storyDailyUsedMinutes}p còn lại)`
+                          : `Picture Stories (${storyDailyLimitMinutes - storyDailyUsedMinutes}m left)`}
+                      </span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => setExtraMinutesGranted((m) => m + 5)}
@@ -1166,18 +1299,69 @@ export function App({ initialTab = 'learn' }: AppProps) {
                     <Clock className="w-4 h-4" aria-hidden="true" />
                     <span>
                       {currentInterfaceLocale === 'vi'
-                        ? 'Phụ huynh: Thêm 5 phút nữa'
+                        ? 'Phụ huynh: Thêm 5 phút bài học'
                         : 'Parent: Allow 5 more minutes'}
                     </span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => setActiveTab('parents')}
+                    onClick={() => navigateTab('parents')}
                     className="px-5 py-2.5 min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer"
                   >
                     {currentInterfaceLocale === 'vi'
-                      ? 'Điều chỉnh giới hạn'
-                      : 'Adjust daily limit'}
+                      ? 'Điều chỉnh khung giờ'
+                      : 'Adjust limits'}
+                  </button>
+                </div>
+              </section>
+            ) : activeTab === 'stories' && isStoryLimitReached ? (
+              <section className="max-w-xl mx-auto surface-card rounded-2xl p-8 sm:p-10 text-center space-y-5">
+                <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400">
+                  <BookOpen className="w-8 h-8" aria-hidden="true" />
+                </div>
+                <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-slate-50">
+                  {currentInterfaceLocale === 'vi'
+                    ? `Đã hết ${storyDailyLimitMinutes} phút đọc Truyện kể hôm nay`
+                    : `Today's ${storyDailyLimitMinutes}-minute story session is complete`}
+                </h2>
+                <p className="text-base text-slate-600 dark:text-slate-300 leading-relaxed">
+                  {currentInterfaceLocale === 'vi'
+                    ? `${activeLearner.nickname} đã đọc trọn vẹn khung giờ Truyện kể tranh hôm nay. Bé vẫn có thể chuyển sang nghe Sách nói & Truyện dài hoàn toàn không giới hạn thời gian!`
+                    : `${activeLearner.nickname} completed today's picture story limit. Switch to Audiobooks & Long Stories for unlimited calm listening anytime!`}
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => navigateTab('audiobooks')}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 min-h-[44px] rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition-colors cursor-pointer"
+                  >
+                    <Headphones className="w-4 h-4" aria-hidden="true" />
+                    <span>
+                      {currentInterfaceLocale === 'vi'
+                        ? 'Mở Sách nói (Không giới hạn)'
+                        : 'Open Audiobooks (Unlimited)'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExtraStoryMinutesGranted((m) => m + 5)}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 min-h-[44px] rounded-xl btn-accent text-sm font-semibold cursor-pointer"
+                  >
+                    <Clock className="w-4 h-4" aria-hidden="true" />
+                    <span>
+                      {currentInterfaceLocale === 'vi'
+                        ? 'Phụ huynh: Thêm 5 phút truyện kể'
+                        : 'Parent: Allow 5 more story minutes'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigateTab('parents')}
+                    className="px-5 py-2.5 min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer"
+                  >
+                    {currentInterfaceLocale === 'vi'
+                      ? 'Điều chỉnh khung giờ'
+                      : 'Adjust limits'}
                   </button>
                 </div>
               </section>
@@ -1193,7 +1377,7 @@ export function App({ initialTab = 'learn' }: AppProps) {
                             ? 'Thanh chọn hồ sơ học sinh'
                             : 'Learner switcher bar'
                         }
-                        className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3 flex flex-wrap items-center justify-between gap-3"
+                        className="surface-card rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3"
                       >
                         <div className="flex flex-wrap items-center gap-2.5">
                           <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">
@@ -1372,7 +1556,7 @@ export function App({ initialTab = 'learn' }: AppProps) {
                             </button>
                             <button
                               type="button"
-                              onClick={() => navigateTab('stories')}
+                              onClick={() => navigateTab('audiobooks')}
                               className="px-5 py-3 min-h-[46px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap cursor-pointer"
                             >
                               {messages.hero.openStoryButton}
@@ -1384,7 +1568,7 @@ export function App({ initialTab = 'learn' }: AppProps) {
                         </div>
 
                         <div className="lg:col-span-5">
-                          <div className="h-full min-h-[240px] rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+                          <div className="h-full min-h-[240px] rounded-2xl overflow-hidden surface-card">
                             <AssetImage
                               assetRef={getPackageCoverRef(
                                 activePackageId,
@@ -1421,7 +1605,7 @@ export function App({ initialTab = 'learn' }: AppProps) {
                             ? 'Lộ trình học mỗi ngày'
                             : 'Daily learning routine'
                         }
-                        className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                        className="surface-card rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4"
                       >
                         <div className="space-y-1">
                           <p className="text-xs font-semibold text-accent inline-flex items-center gap-1.5">
@@ -1674,6 +1858,22 @@ export function App({ initialTab = 'learn' }: AppProps) {
                     ageGroups={ageGroups}
                     languages={languages}
                     messages={messages}
+                    sectionMode="stories"
+                    storyUsedMinutes={storyDailyUsedMinutes}
+                    storyLimitMinutes={storyDailyLimitMinutes}
+                    onSwitchSection={(nextTab) => navigateTab(nextTab)}
+                    onOpenPackage={openPackageFromStory}
+                  />
+                )}
+
+                {activeTab === 'audiobooks' && (
+                  <StoryReader
+                    learner={activeLearner}
+                    ageGroups={ageGroups}
+                    languages={languages}
+                    messages={messages}
+                    sectionMode="audiobooks"
+                    onSwitchSection={(nextTab) => navigateTab(nextTab)}
                     onOpenPackage={openPackageFromStory}
                   />
                 )}
@@ -1709,7 +1909,7 @@ export function App({ initialTab = 'learn' }: AppProps) {
       </main>
 
       {!isFocusStage && (
-        <footer className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0B1120] mt-12 transition-colors">
+        <footer className="border-t border-slate-200/80 dark:border-slate-800/90 bg-white dark:bg-[#090E1A] mt-14 transition-colors">
           <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400">
             <span className="inline-flex items-center gap-2">
               <BrandLogo size="sm" showWordmark={false} />
@@ -1744,11 +1944,15 @@ export function App({ initialTab = 'learn' }: AppProps) {
           {navItems.map(([tabKey, label]) => {
             const isActive = activeTab === tabKey;
             const Icon =
-              tabKey === 'learn'
-                ? Layers
-                : tabKey === 'stories'
-                  ? BookOpen
-                  : Users;
+              tabKey === 'home'
+                ? Home
+                : tabKey === 'learn'
+                  ? Layers
+                  : tabKey === 'stories'
+                    ? BookOpen
+                    : tabKey === 'audiobooks'
+                      ? Headphones
+                      : Users;
             return (
               <button
                 key={tabKey}

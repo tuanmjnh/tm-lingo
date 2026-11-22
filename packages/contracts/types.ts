@@ -112,6 +112,7 @@ export interface LearnerPreferences {
   narrationLocale: string;
   reducedMotion: boolean;
   dailyMinutesLimit: number;
+  storyDailyMinutesLimit?: number;
   audioSpeed: number;
 }
 
@@ -272,10 +273,14 @@ export interface StorySegment {
   order: number;
   assetRef: string;
   conceptRef?: string;
+  chapterTitle?: string;
+  durationSec?: number;
   textByLocale: Record<string, string>;
   explanationByLocale: Record<string, string>;
   audioUrlByLocale?: Record<string, string>;
 }
+
+export type StoryFormat = 'picture_book' | 'audiobook' | 'long_story';
 
 export interface StoryBook {
   id: string;
@@ -290,6 +295,9 @@ export interface StoryBook {
   segments: StorySegment[];
   status: PublicationWorkflowStatus;
   publishedVersion?: number;
+  storyFormat?: StoryFormat;
+  chapterCount?: number;
+  totalDurationSec?: number;
   category?: StoryCategoryKey;
   sourceId?: string;
   sourceName?: string;
@@ -547,6 +555,9 @@ export type StoryCategoryKey =
 
 export type StorySourceAdapterType =
   | 'curated_library'
+  | 'librivox'
+  | 'wikisource'
+  | 'archive_org'
   | 'gutendex'
   | 'rss'
   | 'json_catalog';
@@ -596,6 +607,9 @@ export interface ExternalStoryCatalogItem {
   locale: string;
   availableLocales: string[];
   coverAssetRef: string;
+  storyFormat?: StoryFormat;
+  chapterCount?: number;
+  totalDurationSec?: number;
   hasAudio?: boolean;
   estimatedMinutes?: number;
   alreadyImportedStoryId?: string | null;

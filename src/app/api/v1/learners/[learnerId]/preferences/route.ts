@@ -10,6 +10,7 @@ const patchPreferencesSchema = z.object({
   narrationLocale: z.string().min(2).max(10).optional(),
   reducedMotion: z.boolean().optional(),
   dailyMinutesLimit: z.number().int().min(5).max(60).optional(),
+  storyDailyMinutesLimit: z.number().int().min(5).max(60).optional(),
   audioSpeed: z.number().min(0.65).max(1.25).optional(),
 });
 

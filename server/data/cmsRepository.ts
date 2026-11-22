@@ -18,6 +18,10 @@ import {
   STORIES,
   VOCABULARY_CONCEPTS,
 } from './seedStore';
+import {
+  buildStoryBookFromCurated,
+  CURATED_BILINGUAL_STORIES,
+} from './curatedStoriesCatalog';
 
 const memoryPackages: Map<string, CmsLearningPackage> = new Map();
 const memoryStories: Map<string, StoryBook> = new Map();
@@ -581,7 +585,22 @@ export async function ensureCmsSeeded(): Promise<void> {
     buildSeedFarmPackage(),
     ...buildSeedK12Packages(),
   ];
-  const starterStories = [buildSeedStory(), buildSeedFarmStory()];
+  const starterLongAudiobooks = ['tam-cam-long-audiobook', 'alice-wonderland-long']
+    .map((extId) => CURATED_BILINGUAL_STORIES.find((s) => s.externalId === extId))
+    .filter((bp): bp is NonNullable<typeof bp> => Boolean(bp))
+    .map((bp) =>
+      buildStoryBookFromCurated(
+        bp,
+        'src-curated-bilingual',
+        'Kho Sách Nói & Truyện Song Ngữ TM-Lingo'
+      )
+    );
+
+  const starterStories = [
+    ...starterLongAudiobooks,
+    buildSeedStory(),
+    buildSeedFarmStory(),
+  ];
 
   for (const pkg of starterPackages) {
     if (!memoryPackages.has(pkg.id)) {

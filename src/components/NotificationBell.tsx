@@ -10,7 +10,9 @@ import { apiClient } from '../shared/apiClient';
 interface NotificationBellProps {
   userId: string;
   interfaceLocale: string;
-  onNavigateTab: (tab: 'learn' | 'stories' | 'parents' | 'admin') => void;
+  onNavigateTab: (
+    tab: 'home' | 'learn' | 'stories' | 'audiobooks' | 'parents' | 'admin'
+  ) => void;
 }
 
 function getReadStorageKey(userId: string) {
@@ -114,10 +116,14 @@ export function NotificationBell({
       saveReadIds([...readIds, item.id]);
     }
     setOpen(false);
-    if (item.targetUrl.includes('stories')) {
+    if (item.targetUrl.includes('audiobooks')) {
+      onNavigateTab('audiobooks');
+    } else if (item.targetUrl.includes('stories')) {
       onNavigateTab('stories');
     } else if (item.targetUrl.includes('parents')) {
       onNavigateTab('parents');
+    } else if (item.targetUrl.includes('home')) {
+      onNavigateTab('home');
     } else {
       onNavigateTab('learn');
     }

@@ -59,12 +59,12 @@ export const DEFAULT_STORY_SOURCES: StorySourceConfig[] = [
   {
     id: 'src-curated-bilingual',
     name: {
-      vi: 'Kho Truyện Cổ Tích & Song Ngữ TM-Lingo',
-      en: 'TM-Lingo Bilingual Folklore & Fables',
+      vi: 'Kho Sách Nói & Truyện Song Ngữ TM-Lingo',
+      en: 'TM-Lingo Bilingual Audiobooks & Fables',
     },
     description: {
-      vi: 'Tuyển chọn truyện cổ tích Việt Nam, ngụ ngôn kinh điển, truyện ngủ ngon và bài đọc khoa học song ngữ Việt – Anh cho Mầm non đến Lớp 12.',
-      en: 'Curated bilingual Vietnamese–English fables, bedtime tales, and youth STEM readings from Preschool through Grade 12.',
+      vi: 'Tuyển chọn truyện dài nhiều chương (Tấm Cám, Thạch Sanh, Nhật ký Dế đồng xanh, Alice...) và truyện tranh song ngữ Việt – Anh phát tức thì, hỗ trợ nghe ngoại tuyến.',
+      en: 'Curated multi-chapter Vietnamese & English audiobooks plus bilingual picture fables ready for instant and offline listening.',
     },
     adapterType: 'curated_library',
     baseUrl: 'internal://curated-bilingual',
@@ -78,27 +78,27 @@ export const DEFAULT_STORY_SOURCES: StorySourceConfig[] = [
       'classics',
     ],
     ageBands: ['3-5', '6-8', '9-11', '12-14', '15-18'],
-    defaultLocale: 'en',
-    supportedLocales: ['en', 'vi'],
+    defaultLocale: 'vi',
+    supportedLocales: ['vi', 'en'],
     enabled: true,
     sortOrder: 1,
     isSystem: true,
     lastTestStatus: 'ok',
-    lastTestMessage: 'Sẵn sàng 10 truyện song ngữ đầy đủ nhiều trang.',
-    lastItemCount: 10,
+    lastTestMessage: 'Sẵn sàng 14 sách nói nhiều chương & truyện song ngữ.',
+    lastItemCount: 14,
   },
   {
-    id: 'src-gutendex-classics',
+    id: 'src-librivox-audiobooks',
     name: {
-      vi: 'Thư viện Truyện Kinh Điển Quốc Tế (Project Gutenberg)',
-      en: 'Global Classic Stories Library (Project Gutenberg)',
+      vi: 'Thư Viện Sách Nói Quốc Tế LibriVox (MP3 Nhiều Chương)',
+      en: 'LibriVox Public Domain Audiobooks (Multi-Chapter MP3)',
     },
     description: {
-      vi: 'Kho sách và truyện kể thiếu nhi, cổ tích và văn học kinh điển mở miễn phí toàn cầu — hỗ trợ tìm kiếm trực tiếp và tải toàn văn chia trang tự động.',
-      en: 'Free public-domain children’s stories, fairy tales, and classic literature with live search and automatic multi-page download.',
+      vi: 'Sách nói tiếng Anh miễn phí do người thật thu âm với đầy đủ từng chương MP3 (The Secret Garden, Alice in Wonderland, Peter Pan, truyện cổ Andersen, Grimm...).',
+      en: 'Free human-narrated multi-chapter MP3 audiobooks from LibriVox: classic fairy tales, children’s novels, and bedtime literature.',
     },
-    adapterType: 'gutendex',
-    baseUrl: 'https://gutendex.com/books',
+    adapterType: 'librivox',
+    baseUrl: 'https://librivox.org/api/feed/audiobooks/',
     categories: ['fables', 'animals', 'bedtime', 'adventure', 'science', 'classics'],
     ageBands: ['6-8', '9-11', '12-14', '15-18'],
     defaultLocale: 'en',
@@ -106,48 +106,61 @@ export const DEFAULT_STORY_SOURCES: StorySourceConfig[] = [
     enabled: true,
     sortOrder: 2,
     isSystem: true,
+    lastTestStatus: 'ok',
+    lastTestMessage: 'Kết nối ổn định · hỗ trợ nghe trực tiếp từng chương MP3.',
   },
   {
-    id: 'src-storynory-rss',
+    id: 'src-wikisource-vi',
     name: {
-      vi: 'Kênh Kể Chuyện Audio Storynory',
-      en: 'Storynory Audio Stories Feed',
+      vi: 'Kho Truyện Dài & Cổ Tích Việt Nam (Wikisource)',
+      en: 'Vietnamese Folklore & Classic Literature (Wikisource)',
     },
     description: {
-      vi: 'Nguồn truyện kể thiếu nhi tiếng Anh kèm bản thu âm giọng đọc diễn cảm (cổ tích, thần thoại, truyện ngủ ngon).',
-      en: 'Classic fairy tales, myths, and gentle audio bedtime stories via open storytelling feed.',
+      vi: 'Kho truyện cổ tích, sự tích dân gian và truyện ngắn văn học Tiếng Việt kinh điển từ dự án mở vi.wikisource.org — tự động chia chương đọc dài và nghe sách nói.',
+      en: 'Open Vietnamese folktales, legends, and classic short stories from Vietnamese Wikisource formatted for long-form reading & audio narration.',
     },
-    adapterType: 'rss',
-    baseUrl: 'https://www.storynory.com/feed/',
-    categories: ['fables', 'bedtime', 'adventure', 'animals'],
-    ageBands: ['3-5', '6-8', '9-11'],
-    defaultLocale: 'en',
-    supportedLocales: ['en'],
+    adapterType: 'wikisource',
+    baseUrl: 'https://vi.wikisource.org/w/api.php',
+    categories: ['fables', 'classics', 'adventure', 'bedtime', 'life-skills'],
+    ageBands: ['6-8', '9-11', '12-14', '15-18'],
+    defaultLocale: 'vi',
+    supportedLocales: ['vi'],
     enabled: true,
     sortOrder: 3,
     isSystem: true,
+    lastTestStatus: 'ok',
+    lastTestMessage: 'Kết nối nhanh · hàng trăm truyện cổ tích & văn học Tiếng Việt.',
   },
   {
-    id: 'src-storyberries-rss',
+    id: 'src-archive-audiobooks',
     name: {
-      vi: 'Kho Truyện Thiếu Nhi Storyberries',
-      en: 'Storyberries Children’s Stories Feed',
+      vi: 'Kho Sách Nói Thiếu Nhi Internet Archive (MP3)',
+      en: 'Internet Archive Children’s Audiobooks (MP3)',
     },
     description: {
-      vi: 'Truyện ngắn thiếu nhi theo chủ đề lòng tốt, thiên nhiên và giờ đi ngủ dành cho trẻ nhỏ và tiểu học.',
-      en: 'Illustrated children’s short stories organized by bedtime, kindness, animals, and fairy tales.',
+      vi: 'Kho lưu trữ sách nói thiếu nhi & cổ tích thế giới (Andersen, Grimm, Pinocchio, Aesop...) kèm ảnh bìa và bản thu âm nhiều chương miễn phí.',
+      en: 'Public-domain children’s and fairy-tale audiobooks hosted on Internet Archive with full chapter audio streams.',
     },
-    adapterType: 'rss',
-    baseUrl: 'https://www.storyberries.com/feed/',
-    categories: ['bedtime', 'fables', 'animals', 'life-skills'],
-    ageBands: ['3-5', '6-8', '9-11'],
+    adapterType: 'archive_org',
+    baseUrl: 'https://archive.org/advancedsearch.php',
+    categories: ['fables', 'bedtime', 'adventure', 'animals', 'classics'],
+    ageBands: ['3-5', '6-8', '9-11', '12-14'],
     defaultLocale: 'en',
     supportedLocales: ['en'],
     enabled: true,
     sortOrder: 4,
     isSystem: true,
+    lastTestStatus: 'ok',
+    lastTestMessage: 'Kết nối ổn định · kho sách nói thiếu nhi & cổ tích thế giới.',
   },
 ];
+
+// Legacy default sources whose upstream public feeds became permanently unavailable/broken
+const DEPRECATED_BROKEN_SOURCE_URLS: Record<string, string> = {
+  'src-storynory-rss': 'https://www.storynory.com/feed/',
+  'src-storyberries-rss': 'https://www.storyberries.com/feed/',
+  'src-gutendex-classics': 'https://gutendex.com/books',
+};
 
 const memorySources = new Map<string, StorySourceConfig>();
 let mongoSeeded = false;
@@ -174,6 +187,24 @@ async function ensureSourcesSeeded(): Promise<void> {
   if (!col) return;
 
   const now = new Date().toISOString();
+
+  // Auto-disable known broken legacy system sources so users no longer hit 500/HTML/timeout errors
+  for (const [legacyId, brokenUrl] of Object.entries(DEPRECATED_BROKEN_SOURCE_URLS)) {
+    await col.updateOne(
+      { id: legacyId, baseUrl: brokenUrl, isSystem: true },
+      {
+        $set: {
+          enabled: false,
+          archivedAt: now,
+          lastTestStatus: 'error',
+          lastTestMessage:
+            'Nguồn cũ phía đối tác đã ngừng/lỗi (đã thay thế bằng nguồn LibriVox, Wikisource Tiếng Việt & Internet Archive ổn định hơn).',
+          updatedAt: now,
+        },
+      }
+    );
+  }
+
   for (const src of DEFAULT_STORY_SOURCES) {
     await col.updateOne(
       { id: src.id },
@@ -187,6 +218,22 @@ async function ensureSourcesSeeded(): Promise<void> {
       { upsert: true }
     );
   }
+
+  // Refresh description & item count on curated source if still using older copy
+  await col.updateOne(
+    { id: 'src-curated-bilingual', isSystem: true },
+    {
+      $set: {
+        name: DEFAULT_STORY_SOURCES[0].name,
+        description: DEFAULT_STORY_SOURCES[0].description,
+        defaultLocale: 'vi',
+        supportedLocales: ['vi', 'en'],
+        lastItemCount: 14,
+        lastTestMessage: DEFAULT_STORY_SOURCES[0].lastTestMessage,
+        updatedAt: now,
+      },
+    }
+  );
 }
 
 function sortSources(items: StorySourceConfig[]): StorySourceConfig[] {

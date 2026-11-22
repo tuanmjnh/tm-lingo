@@ -37,7 +37,15 @@ const patchStorySourceSchema = z.object({
     })
     .optional(),
   adapterType: z
-    .enum(['curated_library', 'gutendex', 'rss', 'json_catalog'])
+    .enum([
+      'curated_library',
+      'librivox',
+      'wikisource',
+      'archive_org',
+      'gutendex',
+      'rss',
+      'json_catalog',
+    ])
     .optional(),
   baseUrl: z.string().min(4).max(500).optional(),
   categories: z.array(categoryEnum).min(1).max(7).optional(),

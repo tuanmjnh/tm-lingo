@@ -11,6 +11,8 @@ import {
   Cloud,
   Compass,
   Download,
+  Headphones,
+  Infinity as InfinityIcon,
   Loader2,
   Moon,
   PlayCircle,
@@ -69,6 +71,7 @@ import {
   saveVoiceSelection,
   VOICE_PREF_CHANGED_EVENT,
 } from '../../lib/voicePreferences';
+import { AudiobookPlayer } from './AudiobookPlayer';
 import { StorySourceDiscovery } from './StorySourceDiscovery';
 
 interface StoryReaderProps {
@@ -76,6 +79,10 @@ interface StoryReaderProps {
   ageGroups?: AgeGroupConfig[];
   languages: LocaleConfig[];
   messages: UiMessages;
+  sectionMode?: 'stories' | 'audiobooks';
+  storyUsedMinutes?: number;
+  storyLimitMinutes?: number;
+  onSwitchSection?: (tab: 'stories' | 'audiobooks') => void;
   onOpenPackage?: (packageId?: string) => void;
 }
 
@@ -197,26 +204,44 @@ function cleanToken(token: string): string {
     .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
 }
 
+function isLongFormStory(item: StoryBook): boolean {
+  if (item.storyFormat === 'audiobook' || item.storyFormat === 'long_story') {
+    return true;
+  }
+  if (item.segments.length >= 6) return true;
+  return item.segments.some(
+    (seg) => Boolean(seg.audioUrlByLocale && Object.keys(seg.audioUrlByLocale).length > 0)
+  );
+}
+
 export function StoryReader({
   learner,
   ageGroups = [],
   languages,
   messages,
+  sectionMode = 'stories',
+  storyUsedMinutes = 0,
+  storyLimitMinutes = 15,
+  onSwitchSection,
   onOpenPackage,
 }: StoryReaderProps) {
   const isVi = learner.preferences.interfaceLocale === 'vi';
+  const isAudiobookSection = sectionMode === 'audiobooks';
   const [stories, setStories] = useState<StoryBook[]>([]);
   const [viewTab, setViewTab] = useState<'library' | 'discover'>('library');
-  const [ageFilter, setAgeFilter] = useState<string>(learner.ageBand || 'all');
+  const [readerStyle, setReaderStyle] = useState<'audiobook' | 'picture'>(
+    isAudiobookSection ? 'audiobook' : 'picture'
+  );
+  const [ageFilter, setAgeFilter] = useState<string>('all');
   const [librarySearch, setLibrarySearch] = useState<string>('');
-  const [activeStoryId, setActiveStoryId] = useState('story-fruit-market');
+  const [activeStoryId, setActiveStoryId] = useState('');
   const [story, setStory] = useState<StoryBook | null>(null);
 
+  // Sync reader style whenever switching between Truyện kể and Sách nói
   useEffect(() => {
-    if (learner.ageBand) {
-      setAgeFilter(learner.ageBand);
-    }
-  }, [learner.id, learner.ageBand]);
+    setReaderStyle(isAudiobookSection ? 'audiobook' : 'picture');
+    setViewTab('library');
+  }, [isAudiobookSection]);
   const [narrationLocale, setNarrationLocale] = useState(
     learner.preferences.narrationLocale
   );
@@ -328,12 +353,6 @@ export function StoryReader({
         if (cancelled) return;
         setStories(res.stories);
         void cacheContent('stories:catalog', res.stories);
-        if (
-          res.stories.length > 0 &&
-          !res.stories.some((s) => s.id === activeStoryId)
-        ) {
-          setActiveStoryId(res.stories[0].id);
-        }
       })
       .catch(async () => {
         const cached = await getCachedContent<StoryBook[]>('stories:catalog');
@@ -344,9 +363,10 @@ export function StoryReader({
     return () => {
       cancelled = true;
     };
-  }, [activeStoryId]);
+  }, []);
 
   useEffect(() => {
+    if (!activeStoryId) return;
     let cancelled = false;
     clearAutoTimer();
     clearHighlightTimer();
@@ -360,6 +380,7 @@ export function StoryReader({
       .then((res) => {
         if (cancelled) return;
         setStory(res.story);
+        setReaderStyle(isLongFormStory(res.story) ? 'audiobook' : 'picture');
         void cacheContent(storyCacheKey, res.story);
         void precacheStorybookAssets(
           res.story,
@@ -385,6 +406,7 @@ export function StoryReader({
         const cached = await getCachedContent<StoryBook>(storyCacheKey);
         if (!cancelled && cached) {
           setStory(cached);
+          setReaderStyle(isLongFormStory(cached) ? 'audiobook' : 'picture');
         }
       });
 
@@ -462,9 +484,25 @@ export function StoryReader({
     });
   };
 
+  const sectionStories = useMemo(() => {
+    return stories.filter((s) =>
+      isAudiobookSection ? isLongFormStory(s) : !isLongFormStory(s)
+    );
+  }, [stories, isAudiobookSection]);
+
+  // Keep activeStoryId aligned with the active section (Truyện kể vs Sách nói)
+  useEffect(() => {
+    const pool = sectionStories.length > 0 ? sectionStories : stories;
+    if (pool.length === 0) return;
+    if (!pool.some((s) => s.id === activeStoryId)) {
+      setActiveStoryId(pool[0].id);
+    }
+  }, [sectionStories, stories, activeStoryId]);
+
   const filteredStories = useMemo(() => {
     const q = librarySearch.trim().toLowerCase();
-    return stories.filter((s) => {
+    const basePool = sectionStories.length > 0 ? sectionStories : stories;
+    return basePool.filter((s) => {
       if (ageFilter !== 'all' && !s.ageBands.includes(ageFilter)) {
         return false;
       }
@@ -481,7 +519,7 @@ export function StoryReader({
       }
       return true;
     });
-  }, [stories, ageFilter, librarySearch]);
+  }, [sectionStories, stories, ageFilter, librarySearch]);
 
   const handleStoryImported = (imported: StoryBook) => {
     clearAutoTimer();
@@ -502,6 +540,7 @@ export function StoryReader({
         : narrationLocale;
     void precacheStorybookAssets(imported, preferredImportedLocale);
     setStory(imported);
+    setReaderStyle(isLongFormStory(imported) ? 'audiobook' : 'picture');
     setActiveStoryId(imported.id);
     setSegmentIndex(0);
     if (
@@ -893,91 +932,183 @@ export function StoryReader({
         bedtimeMode ? 'bg-[#1C1917] text-[#F5EFE6] p-4 sm:p-6' : ''
       }`}
     >
-      {/* Top Mode Switcher: My Library vs. Discover & Download from Sources */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div
-          className={`inline-flex rounded-2xl border p-1 gap-1 ${
-            bedtimeMode
-              ? 'border-stone-700 bg-stone-900'
-              : 'border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-900'
-          }`}
-          role="tablist"
-          aria-label={isVi ? 'Chế độ thư viện truyện' : 'Story library mode'}
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={viewTab === 'library'}
-            onClick={() => setViewTab('library')}
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
-              viewTab === 'library'
-                ? bedtimeMode
-                  ? 'bg-stone-800 text-amber-200 shadow-xs'
-                  : 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                : bedtimeMode
-                  ? 'text-stone-400 hover:text-stone-200'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+      {/* Section Header & Mode Switcher */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-5 border-b border-slate-200/80 dark:border-slate-800">
+        <div className="space-y-1.5">
+          <div
+            className={`flex flex-wrap items-center gap-2 text-xs font-medium tabular-nums ${
+              bedtimeMode
+                ? 'text-stone-400'
+                : 'text-slate-500 dark:text-slate-400'
             }`}
           >
-            <BookOpen className="w-4 h-4" aria-hidden="true" />
             <span>
-              {isVi ? 'Kệ truyện của bạn' : 'My Library'} ({stories.length})
+              {isAudiobookSection
+                ? isVi
+                  ? 'Sách nói & Truyện dài nhiều chương'
+                  : 'Multi-Chapter Audiobooks & Long Stories'
+                : isVi
+                  ? 'Truyện kể tranh tương tác'
+                  : 'Interactive Picture Stories'}
             </span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={viewTab === 'discover'}
-            onClick={() => {
-              clearAutoTimer();
-              clearHighlightTimer();
-              stopSpeaking();
-              setIsLoadingAudio(false);
-              setIsPlaying(false);
-              setViewTab('discover');
-            }}
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
-              viewTab === 'discover'
-                ? bedtimeMode
-                  ? 'bg-stone-800 text-amber-200 shadow-xs'
-                  : 'bg-white dark:bg-slate-800 text-accent shadow-xs'
-                : bedtimeMode
-                  ? 'text-stone-400 hover:text-stone-200'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+            <span aria-hidden="true">·</span>
+            {isAudiobookSection ? (
+              <span className="text-emerald-600 dark:text-emerald-400 font-semibold inline-flex items-center gap-1">
+                <InfinityIcon className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>{isVi ? 'Không giới hạn thời gian' : 'Unlimited listening'}</span>
+              </span>
+            ) : (
+              <span className="font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5 text-accent" aria-hidden="true" />
+                <span>
+                  {isVi
+                    ? `Hôm nay: ${storyUsedMinutes}/${storyLimitMinutes} phút`
+                    : `Today: ${storyUsedMinutes}/${storyLimitMinutes} min`}
+                </span>
+              </span>
+            )}
+          </div>
+          <h1
+            className={`text-2xl sm:text-3xl font-bold tracking-tight ${
+              bedtimeMode
+                ? 'text-[#F5EFE6]'
+                : 'text-slate-900 dark:text-slate-50'
             }`}
           >
-            <Compass className="w-4 h-4" aria-hidden="true" />
+            {isAudiobookSection
+              ? isVi
+                ? 'Thư viện Sách nói & Truyện dài'
+                : 'Audiobooks & Long Stories'
+              : isVi
+                ? 'Thư viện Truyện kể song ngữ'
+                : 'Bilingual Picture Stories'}
+          </h1>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div
+            className={`inline-flex rounded-xl border p-1 gap-1 ${
+              bedtimeMode
+                ? 'border-stone-700 bg-stone-900'
+                : 'border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-900'
+            }`}
+            role="tablist"
+            aria-label={isVi ? 'Chế độ thư viện' : 'Library view mode'}
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewTab === 'library'}
+              onClick={() => setViewTab('library')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                viewTab === 'library'
+                  ? bedtimeMode
+                    ? 'bg-stone-800 text-amber-200 shadow-xs'
+                    : 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
+                  : bedtimeMode
+                    ? 'text-stone-400 hover:text-stone-200'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+              }`}
+            >
+              {isAudiobookSection ? (
+                <Headphones className="w-3.5 h-3.5" aria-hidden="true" />
+              ) : (
+                <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
+              )}
+              <span className="tabular-nums">
+                {isAudiobookSection
+                  ? isVi
+                    ? `Kệ sách nói (${sectionStories.length})`
+                    : `Audiobooks (${sectionStories.length})`
+                  : isVi
+                    ? `Kệ truyện (${sectionStories.length})`
+                    : `Stories (${sectionStories.length})`}
+              </span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewTab === 'discover'}
+              onClick={() => {
+                clearAutoTimer();
+                clearHighlightTimer();
+                stopSpeaking();
+                setIsLoadingAudio(false);
+                setIsPlaying(false);
+                setViewTab('discover');
+              }}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                viewTab === 'discover'
+                  ? bedtimeMode
+                    ? 'bg-stone-800 text-amber-200 shadow-xs'
+                    : 'bg-white dark:bg-slate-800 text-accent shadow-xs'
+                  : bedtimeMode
+                    ? 'text-stone-400 hover:text-stone-200'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+              }`}
+            >
+              <Compass className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>
+                {isVi ? 'Khám phá nguồn mở' : 'Browse Sources'}
+              </span>
+            </button>
+          </div>
+
+          {onSwitchSection && (
+            <button
+              type="button"
+              onClick={() =>
+                onSwitchSection(isAudiobookSection ? 'stories' : 'audiobooks')
+              }
+              className={`inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-xl border text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                bedtimeMode
+                  ? 'border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800'
+                  : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
+              }`}
+            >
+              {isAudiobookSection ? (
+                <BookOpen className="w-3.5 h-3.5 text-accent" aria-hidden="true" />
+              ) : (
+                <Headphones className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+              )}
+              <span>
+                {isAudiobookSection
+                  ? isVi
+                    ? 'Sang Truyện kể tranh'
+                    : 'Switch to Stories'
+                  : isVi
+                    ? 'Sách nói (Không giới hạn)'
+                    : 'Audiobooks (Unlimited)'}
+              </span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={toggleBedtimeMode}
+            aria-pressed={bedtimeMode}
+            className={`inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-xl border text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+              bedtimeMode
+                ? 'border-amber-400/50 bg-amber-950/70 text-amber-200 hover:bg-amber-900/70'
+                : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
+            }`}
+          >
+            {bedtimeMode ? (
+              <Sun className="w-3.5 h-3.5" aria-hidden="true" />
+            ) : (
+              <Moon className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400" aria-hidden="true" />
+            )}
             <span>
-              {isVi ? 'Khám phá & Tải truyện' : 'Discover & Download'}
+              {bedtimeMode
+                ? isVi
+                  ? 'Tắt chế độ ngủ'
+                  : 'Exit Bedtime'
+                : isVi
+                  ? 'Chế độ ngủ'
+                  : 'Bedtime'}
             </span>
           </button>
         </div>
-
-        <button
-          type="button"
-          onClick={toggleBedtimeMode}
-          aria-pressed={bedtimeMode}
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-xl border text-xs font-semibold transition-colors cursor-pointer ${
-            bedtimeMode
-              ? 'border-amber-400/50 bg-amber-950/70 text-amber-200 hover:bg-amber-900/70'
-              : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
-          }`}
-        >
-          {bedtimeMode ? (
-            <Sun className="w-3.5 h-3.5" aria-hidden="true" />
-          ) : (
-            <Moon className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400" aria-hidden="true" />
-          )}
-          <span>
-            {bedtimeMode
-              ? isVi
-                ? 'Tắt chế độ đi ngủ'
-                : 'Exit Bedtime Mode'
-              : isVi
-                ? 'Chế độ đi ngủ'
-                : 'Bedtime Mode'}
-          </span>
-        </button>
       </div>
 
       {viewTab === 'discover' ? (
@@ -985,6 +1116,7 @@ export function StoryReader({
           interfaceLocale={learner.preferences.interfaceLocale}
           ageGroups={ageGroups}
           initialAgeBand={learner.ageBand}
+          defaultFormat={isAudiobookSection ? 'audiobook' : 'picture_book'}
           bedtimeMode={bedtimeMode}
           onStoryImported={handleStoryImported}
           onOpenExistingStory={handleOpenExistingFromDiscovery}
@@ -994,27 +1126,52 @@ export function StoryReader({
           {/* Visual Story Bookshelf */}
           {stories.length > 0 && (
             <section
-              aria-label={isVi ? 'Kệ sách truyện kể' : 'Picture story bookshelf'}
+              aria-label={
+                isAudiobookSection
+                  ? isVi
+                    ? 'Kệ sách nói và truyện dài'
+                    : 'Audiobooks bookshelf'
+                  : isVi
+                    ? 'Kệ truyện kể tranh'
+                    : 'Picture story bookshelf'
+              }
               className="space-y-3"
             >
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <h2
-                  className={`text-sm font-bold inline-flex items-center gap-2 ${
-                    bedtimeMode
-                      ? 'text-[#F5EFE6]'
-                      : 'text-slate-900 dark:text-slate-100'
-                  }`}
-                >
-                  <BookOpen
-                    className={`w-4 h-4 ${
-                      bedtimeMode ? 'text-amber-300' : 'text-accent'
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2
+                    className={`text-sm font-bold inline-flex items-center gap-2 ${
+                      bedtimeMode
+                        ? 'text-[#F5EFE6]'
+                        : 'text-slate-900 dark:text-slate-100'
                     }`}
-                    aria-hidden="true"
-                  />
-                  <span>
-                    {isVi ? 'Chọn truyện tranh để đọc' : 'Choose a picture story'}
-                  </span>
-                </h2>
+                  >
+                    {isAudiobookSection ? (
+                      <Headphones
+                        className={`w-4 h-4 ${
+                          bedtimeMode ? 'text-amber-300' : 'text-accent'
+                        }`}
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <BookOpen
+                        className={`w-4 h-4 ${
+                          bedtimeMode ? 'text-amber-300' : 'text-accent'
+                        }`}
+                        aria-hidden="true"
+                      />
+                    )}
+                    <span>
+                      {isAudiobookSection
+                        ? isVi
+                          ? 'Danh sách Sách nói & Truyện dài'
+                          : 'Audiobooks & Long Stories Shelf'
+                        : isVi
+                          ? 'Danh sách Truyện kể tranh'
+                          : 'Picture Stories Shelf'}
+                    </span>
+                  </h2>
+                </div>
 
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="relative">
@@ -1067,7 +1224,7 @@ export function StoryReader({
                     }`}
                   >
                     <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>{isVi ? 'Tải thêm truyện' : 'Get more stories'}</span>
+                    <span>{isVi ? 'Tải thêm sách nói & truyện' : 'Browse Sources'}</span>
                   </button>
                 </div>
               </div>
@@ -1161,17 +1318,43 @@ export function StoryReader({
                     >
                       {itemSummary}
                     </p>
-                    <p
-                      className={`text-[11px] font-medium tabular-nums pt-0.5 truncate ${
-                        bedtimeMode
-                          ? 'text-stone-500'
-                          : 'text-slate-400 dark:text-slate-500'
-                      }`}
-                    >
-                      {item.segments.length} {isVi ? 'trang' : 'pages'} ·{' '}
-                      {item.ageBands.join(', ')}
-                      {item.sourceName ? ` · ${item.sourceName}` : ''}
-                    </p>
+                      <p
+                        className={`text-[11px] font-medium tabular-nums pt-0.5 truncate flex items-center gap-1.5 ${
+                          bedtimeMode
+                            ? 'text-stone-400'
+                            : 'text-slate-500 dark:text-slate-400'
+                        }`}
+                      >
+                        {isLongFormStory(item) ? (
+                          <span className="inline-flex items-center gap-1 text-sky-600 dark:text-sky-400 font-bold shrink-0">
+                            <Headphones className="w-3 h-3" aria-hidden="true" />
+                            <span>
+                              {item.storyFormat === 'audiobook'
+                                ? isVi
+                                  ? 'Sách nói MP3'
+                                  : 'MP3 Audiobook'
+                                : isVi
+                                  ? 'Truyện dài'
+                                  : 'Long Story'}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="shrink-0">
+                            {isVi ? 'Truyện tranh' : 'Picture'}
+                          </span>
+                        )}
+                        <span>
+                          · {item.segments.length}{' '}
+                          {isLongFormStory(item)
+                            ? isVi
+                              ? 'chương'
+                              : 'ch.'
+                            : isVi
+                              ? 'trang'
+                              : 'pages'}
+                        </span>
+                        {item.sourceName ? ` · ${item.sourceName}` : ''}
+                      </p>
                   </div>
                 </button>
               );
@@ -1180,7 +1363,40 @@ export function StoryReader({
         </section>
       )}
 
-      {story && segment && (
+      {story && segment && readerStyle === 'audiobook' ? (
+        <AudiobookPlayer
+          story={story}
+          chapterIndex={segmentIndex}
+          narrationLocale={effectiveNarrationLocale}
+          explanationLocale={explanationLocale}
+          interfaceLocale={learner.preferences.interfaceLocale}
+          languages={languages}
+          voices={voices}
+          selectedVoiceId={selectedVoiceId}
+          selectedAccent={selectedAccent}
+          bedtimeMode={bedtimeMode}
+          savedNotice={savedNotice}
+          offlineRecord={storyOfflineRecord}
+          offlineSaving={offlineSaving}
+          offlineAudioProgress={offlineAudioProgress}
+          audioSavedForCurrent={audioSavedKey === activeStoryAudioKey}
+          onSelectChapter={(idx) => {
+            setSegmentIndex(idx);
+            void persistPosition(idx, effectiveNarrationLocale);
+          }}
+          onChangeNarrationLocale={(nextLocale) => {
+            setNarrationLocale(nextLocale);
+            void persistPosition(segmentIndex, nextLocale);
+          }}
+          onVoiceChange={handleVoiceChange}
+          onAccentChange={handleAccentChange}
+          onSaveOffline={() => void handleSaveStoryOffline()}
+          onSwitchToPictureMode={() => {
+            stopSpeaking();
+            setReaderStyle('picture');
+          }}
+        />
+      ) : story && segment ? (
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         {/* Left/Primary Zone: Picture Book Stage */}
         <section
@@ -1689,7 +1905,7 @@ export function StoryReader({
                     <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
                     <span>{isVi ? 'Đọc lại' : 'Read again'}</span>
                   </button>
-                  {onOpenPackage && (
+                  {onOpenPackage && story.learningPackageId && (
                     <button
                       type="button"
                       onClick={() => onOpenPackage(story.learningPackageId)}
@@ -1716,15 +1932,35 @@ export function StoryReader({
           }`}
         >
           <div className="space-y-1">
-            <h2
-              className={`text-lg font-bold ${
-                bedtimeMode
-                  ? 'text-[#F5EFE6]'
-                  : 'text-slate-900 dark:text-slate-100'
-              }`}
-            >
-              {messages.story.heading}
-            </h2>
+            <div className="flex items-start justify-between gap-2">
+              <h2
+                className={`text-lg font-bold ${
+                  bedtimeMode
+                    ? 'text-[#F5EFE6]'
+                    : 'text-slate-900 dark:text-slate-100'
+                }`}
+              >
+                {messages.story.heading}
+              </h2>
+              <button
+                type="button"
+                onClick={() => {
+                  clearAutoTimer();
+                  clearHighlightTimer();
+                  stopSpeaking();
+                  setIsPlaying(false);
+                  setReaderStyle('audiobook');
+                }}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-[11px] font-bold shrink-0 cursor-pointer transition-colors ${
+                  bedtimeMode
+                    ? 'border-amber-400/50 bg-stone-800 text-amber-200 hover:bg-stone-700'
+                    : 'border-accent bg-accent-soft hover:opacity-90'
+                }`}
+              >
+                <Headphones className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>{isVi ? 'Chế độ Sách nói' : 'Audiobook Mode'}</span>
+              </button>
+            </div>
             <p
               className={`text-sm ${
                 bedtimeMode
@@ -1962,7 +2198,7 @@ export function StoryReader({
           </div>
         </aside>
       </div>
-      )}
+      ) : null}
         </>
       )}
     </div>

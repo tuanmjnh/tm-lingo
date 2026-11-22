@@ -471,6 +471,10 @@ export class LingoRepository {
         narrationLocale: input.narrationLocale,
         reducedMotion: false,
         dailyMinutesLimit: resolvedGroup.uiProfile.defaultDailyMinutes,
+        storyDailyMinutesLimit: Math.max(
+          10,
+          resolvedGroup.uiProfile.defaultDailyMinutes
+        ),
         audioSpeed: resolvedGroup.uiProfile.defaultAudioSpeed,
       },
       createdAt: now,

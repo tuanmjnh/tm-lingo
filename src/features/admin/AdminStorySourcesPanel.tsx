@@ -43,9 +43,24 @@ const ADAPTER_LABELS: Record<
   { vi: string; en: string; placeholderUrl: string }
 > = {
   curated_library: {
-    vi: 'Kho tuyển chọn nội bộ',
-    en: 'Curated Built-in Library',
+    vi: 'Kho sách nói & truyện tuyển chọn nội bộ',
+    en: 'Curated Built-in Audiobooks & Stories',
     placeholderUrl: 'internal://curated-bilingual',
+  },
+  librivox: {
+    vi: 'Sách nói MP3 nhiều chương (LibriVox)',
+    en: 'Multi-Chapter MP3 Audiobooks (LibriVox)',
+    placeholderUrl: 'https://librivox.org/api/feed/audiobooks/',
+  },
+  wikisource: {
+    vi: 'Truyện dài & Cổ tích mở (Wikisource)',
+    en: 'Open Folklore & Literature (Wikisource)',
+    placeholderUrl: 'https://vi.wikisource.org/w/api.php',
+  },
+  archive_org: {
+    vi: 'Kho Sách nói Internet Archive (MP3)',
+    en: 'Internet Archive Audiobooks (MP3)',
+    placeholderUrl: 'https://archive.org/advancedsearch.php',
   },
   gutendex: {
     vi: 'Thư viện sách mở (Gutendex)',
@@ -55,7 +70,7 @@ const ADAPTER_LABELS: Record<
   rss: {
     vi: 'Kênh truyện tự động (RSS / Atom)',
     en: 'Storytelling Feed (RSS / Atom)',
-    placeholderUrl: 'https://www.storynory.com/feed/',
+    placeholderUrl: 'https://example.org/stories/feed.xml',
   },
   json_catalog: {
     vi: 'Danh mục truyện JSON',

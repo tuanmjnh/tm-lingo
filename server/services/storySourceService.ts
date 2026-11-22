@@ -178,9 +178,11 @@ function splitPlainTextToSegments(params: {
   category: StoryCategoryKey;
   audioUrl?: string;
   maxPages?: number;
+  targetChars?: number;
+  chapterPrefix?: string;
 }): StorySegment[] {
-  const maxPages = params.maxPages ?? 10;
-  const targetChars = 340;
+  const maxPages = params.maxPages ?? 30;
+  const targetChars = params.targetChars ?? 950;
   const rawParagraphs = params.text
     .split(/\n{2,}/)
     .map((p) => p.replace(/\s+/g, ' ').trim())
@@ -202,7 +204,7 @@ function splitPlainTextToSegments(params: {
       const sentences = para.match(/[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g) ?? [para];
       let chunk = '';
       for (const s of sentences) {
-        if (chunk.length + s.length > targetChars && chunk.length > 80) {
+        if (chunk.length + s.length > targetChars && chunk.length > 160) {
           pages.push(chunk.trim());
           chunk = s.trim();
           if (pages.length >= maxPages) break;
@@ -216,11 +218,11 @@ function splitPlainTextToSegments(params: {
       continue;
     }
 
-    if (buffer.length + para.length > targetChars && buffer.length > 90) {
+    if (buffer.length + para.length > targetChars && buffer.length > 220) {
       pages.push(buffer.trim());
       buffer = para;
     } else {
-      buffer = buffer ? `${buffer} ${para}` : para;
+      buffer = buffer ? `${buffer}\n\n${para}` : para;
     }
   }
 
@@ -231,23 +233,26 @@ function splitPlainTextToSegments(params: {
   if (pages.length === 0) {
     pages.push(
       params.locale === 'vi'
-        ? 'Mời bé cùng nghe câu chuyện thú vị này nhé.'
+        ? 'Mời bạn cùng lắng nghe câu chuyện thú vị này nhé.'
         : 'Welcome to this story! Press play to listen aloud.'
     );
   }
 
   const fallbackArt = CATEGORY_FALLBACK_ART[params.category] ?? 'img-story-sunny-farm';
+  const chapterLabel =
+    params.chapterPrefix ?? (params.locale === 'vi' ? 'Phần' : 'Chapter');
 
   return pages.map((pageText, idx) => ({
     id: `${params.storyId}-seg-${String(idx + 1).padStart(2, '0')}`,
     order: idx + 1,
     assetRef: idx === 0 ? params.coverAssetRef : fallbackArt,
+    chapterTitle: `${chapterLabel} ${idx + 1}`,
     textByLocale: {
       [params.locale]: pageText,
     },
     explanationByLocale: {
-      vi: `Trang ${idx + 1}/${pages.length} — Chạm bất kỳ từ nào để nghe phát âm chậm.`,
-      en: `Page ${idx + 1} of ${pages.length} — Tap any word to hear it read slowly.`,
+      vi: `${chapterLabel} ${idx + 1}/${pages.length} — Chạm nút Nghe để thưởng thức liên tục không giới hạn thời gian.`,
+      en: `${chapterLabel} ${idx + 1} of ${pages.length} — Press Play for continuous unlimited audiobook listening.`,
     },
     ...(idx === 0 && params.audioUrl
       ? { audioUrlByLocale: { [params.locale]: params.audioUrl } }
@@ -290,13 +295,406 @@ function fetchCuratedSourceItems(
       summaryVi: story.summaries.vi,
       category: story.category,
       ageBands: story.ageBands,
-      locale: 'en',
-      availableLocales: ['en', 'vi'],
+      locale: 'vi',
+      availableLocales: ['vi', 'en'],
       coverAssetRef: story.coverAssetRef,
-      hasAudio: false,
+      storyFormat: story.storyFormat ?? 'picture_book',
+      chapterCount: story.segments.length,
+      totalDurationSec: story.estimatedMinutes * 60,
+      hasAudio: story.storyFormat === 'long_story',
       estimatedMinutes: story.estimatedMinutes,
     },
   }));
+}
+
+// ---------- Adapter 1B: LibriVox Public Domain Audiobooks (Multi-Chapter MP3) ----------
+
+interface LibriVoxAuthor {
+  first_name?: string;
+  last_name?: string;
+}
+
+interface LibriVoxSection {
+  id?: string;
+  section_number?: string;
+  title?: string;
+  listen_url?: string;
+  language?: string;
+  playtime?: string | number;
+  readers?: Array<{ display_name?: string }>;
+}
+
+interface LibriVoxBook {
+  id?: string | number;
+  title?: string;
+  description?: string;
+  language?: string;
+  totaltimesecs?: number;
+  num_sections?: string | number;
+  url_iarchive?: string;
+  authors?: LibriVoxAuthor[];
+  sections?: LibriVoxSection[];
+  genres?: Array<{ name?: string }>;
+}
+
+const LIBRIVOX_CATEGORY_GENRE: Record<StoryCategoryKey, string> = {
+  fables: 'Myths, Legends & Fairy Tales',
+  animals: 'Animals & Nature',
+  bedtime: "Children's Fiction",
+  adventure: 'Action & Adventure Fiction',
+  science: 'Science',
+  'life-skills': "Children's Fiction",
+  classics: "Children's Fiction",
+};
+
+function mapLibriVoxLanguageToLocale(language?: string): string {
+  const lower = (language || '').trim().toLowerCase();
+  if (lower.startsWith('viet')) return 'vi';
+  if (lower.startsWith('fren')) return 'fr';
+  if (lower.startsWith('germ')) return 'de';
+  if (lower.startsWith('span')) return 'es';
+  if (lower.startsWith('japan')) return 'ja';
+  if (lower.startsWith('chin')) return 'zh';
+  return 'en';
+}
+
+function extractArchiveCoverFromUrl(urlIArchive?: string): string | null {
+  if (!urlIArchive || typeof urlIArchive !== 'string') return null;
+  const match = urlIArchive.match(/archive\.org\/details\/([a-zA-Z0-9._-]+)/i);
+  if (!match?.[1]) return null;
+  return sanitizeExternalMediaUrl(`https://archive.org/services/img/${match[1]}`);
+}
+
+async function fetchLibriVoxItems(
+  source: StorySourceConfig,
+  options: { category?: StoryCategoryKey; q?: string; locale?: string }
+): Promise<ResolvedFeedItem[]> {
+  const url = new URL(source.baseUrl);
+  url.searchParams.set('format', 'json');
+  url.searchParams.set('extended', '1');
+  url.searchParams.set('limit', '12');
+
+  if (options.q?.trim()) {
+    url.searchParams.set('title', `^${options.q.trim().slice(0, 60)}`);
+  } else {
+    const genre = options.category
+      ? LIBRIVOX_CATEGORY_GENRE[options.category]
+      : "Children's Fiction";
+    url.searchParams.set('genre', genre);
+  }
+
+  const cacheKey = `librivox:${source.id}:${url.toString()}`;
+  const cached = feedCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.items;
+  }
+
+  let res: { text: string; contentType: string; finalUrl: string };
+  try {
+    res = await safeExternalFetch(url.toString(), {
+      timeoutMs: 11_000,
+      maxBytes: 2_000_000,
+      accept: 'application/json',
+    });
+  } catch (err) {
+    // LibriVox returns 404 when a prefix title search has 0 matches — treat cleanly as empty list
+    if (options.q?.trim() && err instanceof Error && err.message.includes('404')) {
+      return [];
+    }
+    throw err;
+  }
+
+  const payload = JSON.parse(res.text) as { books?: LibriVoxBook[] };
+  const books = Array.isArray(payload.books) ? payload.books : [];
+
+  const items: ResolvedFeedItem[] = books
+    .filter((b) => b.id && typeof b.title === 'string' && b.title.trim().length > 0)
+    .map((book) => {
+      const cleanDesc = stripHtmlToParagraphs(book.description || '');
+      const genreText = (book.genres ?? []).map((g) => g.name || '').join(' ');
+      const inferredCategory =
+        options.category ||
+        inferCategoryFromText(`${book.title} ${genreText} ${cleanDesc}`, source.categories);
+      const authorName =
+        (book.authors ?? [])
+          .map((a) => [a.first_name, a.last_name].filter(Boolean).join(' ').trim())
+          .filter(Boolean)
+          .join(', ') || 'LibriVox Classic';
+      const locale = mapLibriVoxLanguageToLocale(book.language);
+      const totalSec = Number(book.totaltimesecs) || 0;
+      const chapterCount =
+        Array.isArray(book.sections) && book.sections.length > 0
+          ? book.sections.length
+          : Number(book.num_sections) || 1;
+      const estimatedMinutes = Math.max(
+        5,
+        Math.round(totalSec > 0 ? totalSec / 60 : chapterCount * 8)
+      );
+      const safeCover =
+        extractArchiveCoverFromUrl(book.url_iarchive) ||
+        CATEGORY_FALLBACK_ART[inferredCategory] ||
+        'img-story-sunny-farm';
+
+      const isKids = /child|fairy|fable|juvenile|bedtime|animal|nursery/i.test(
+        `${book.title} ${genreText}`
+      );
+
+      return {
+        catalog: {
+          externalId: String(book.id),
+          sourceId: source.id,
+          sourceName: source.name,
+          adapterType: 'librivox',
+          title: (book.title || '').trim().slice(0, 140),
+          author: authorName.slice(0, 100),
+          summary: (cleanDesc || `Full audiobook by ${authorName}.`).slice(0, 240),
+          category: inferredCategory,
+          ageBands: isKids ? ['6-8', '9-11', '12-14'] : ['9-11', '12-14', '15-18'],
+          locale,
+          availableLocales: [locale],
+          coverAssetRef: safeCover,
+          storyFormat: 'audiobook',
+          chapterCount,
+          totalDurationSec: totalSec || estimatedMinutes * 60,
+          hasAudio: true,
+          estimatedMinutes,
+        },
+      };
+    });
+
+  feedCache.set(cacheKey, { fetchedAt: Date.now(), items });
+  return items;
+}
+
+// ---------- Adapter 1C: Vietnamese Wikisource (Open Vietnamese Folklore & Literature) ----------
+
+interface WikiSearchHit {
+  pageid?: number;
+  title?: string;
+  snippet?: string;
+  wordcount?: number;
+}
+
+const WIKISOURCE_CATEGORY_QUERY: Record<StoryCategoryKey, string> = {
+  fables: 'Sự tích',
+  animals: 'Truyện cổ tích',
+  bedtime: 'Truyện cổ tích',
+  adventure: 'Truyền kỳ',
+  science: 'Sự tích',
+  'life-skills': 'Truyện ngắn',
+  classics: 'Truyện ngắn',
+};
+
+function cleanWikisourceHtml(html: string): string {
+  // Remove MediaWiki navigation/header/footer/edit tables before extracting clean text
+  const stripped = html
+    .replace(/<table[\s\S]*?<\/table>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<sup[\s\S]*?<\/sup>/gi, '')
+    .replace(/<div[^>]*class=["'][^"']*(?:ws-header|ws-noexport|headertemplate|navbox|toc|mw-editsection|license|printfooter)[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, ' ');
+
+  const text = stripHtmlToParagraphs(stripped);
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((p) => p.replace(/\s+/g, ' ').trim())
+    .filter((p) => {
+      if (p.length < 30) return false;
+      if (/^(thông tin về bản này|tác phẩm này thuộc phạm vi công cộng|nguồn:|mục lục|xem thêm|chú thích)/i.test(p)) {
+        return false;
+      }
+      return true;
+    });
+
+  return paragraphs.join('\n\n');
+}
+
+async function fetchWikisourceViItems(
+  source: StorySourceConfig,
+  options: { category?: StoryCategoryKey; q?: string }
+): Promise<ResolvedFeedItem[]> {
+  const searchQuery = options.q?.trim()
+    ? options.q.trim().slice(0, 80)
+    : options.category
+      ? WIKISOURCE_CATEGORY_QUERY[options.category]
+      : 'Sự tích';
+
+  const url = new URL(source.baseUrl);
+  url.searchParams.set('action', 'query');
+  url.searchParams.set('list', 'search');
+  url.searchParams.set('srsearch', searchQuery);
+  url.searchParams.set('srnamespace', '0');
+  url.searchParams.set('srlimit', '18');
+  url.searchParams.set('format', 'json');
+
+  const cacheKey = `wikisource:${source.id}:${url.toString()}`;
+  const cached = feedCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.items;
+  }
+
+  const res = await safeExternalFetch(url.toString(), {
+    timeoutMs: 10_000,
+    maxBytes: 1_000_000,
+    accept: 'application/json',
+  });
+
+  const payload = JSON.parse(res.text) as {
+    query?: { search?: WikiSearchHit[] };
+  };
+  const hits = Array.isArray(payload.query?.search) ? payload.query!.search! : [];
+
+  const items: ResolvedFeedItem[] = hits
+    .filter((h) => {
+      if (!h.pageid || !h.title) return false;
+      // Skip meta/index/preface subpages or tiny stubs
+      if (/(\/Tựa|\/Lời |Mục lục|Thể loại:)/i.test(h.title)) return false;
+      if (typeof h.wordcount === 'number' && h.wordcount < 160) return false;
+      return true;
+    })
+    .slice(0, 12)
+    .map((hit) => {
+      const title = (hit.title || '').trim().slice(0, 140);
+      const snippet = stripHtmlToParagraphs(hit.snippet || '');
+      const inferredCategory =
+        options.category || inferCategoryFromText(`${title} ${snippet}`, source.categories);
+      const words = Number(hit.wordcount) || 450;
+      const estimatedMinutes = Math.max(4, Math.min(45, Math.round(words / 135)));
+      const chapterCount = Math.max(2, Math.min(24, Math.ceil(words / 220)));
+
+      return {
+        catalog: {
+          externalId: String(hit.pageid),
+          sourceId: source.id,
+          sourceName: source.name,
+          adapterType: 'wikisource',
+          title,
+          titleVi: title,
+          author: 'Kho Văn Học & Cổ Tích Mở (vi.wikisource.org)',
+          summary: snippet
+            ? `${snippet.slice(0, 210)}...`
+            : `Truyện dài Tiếng Việt (~${words} từ) chia chương đọc & nghe sách nói không giới hạn.`,
+          summaryVi: snippet
+            ? `${snippet.slice(0, 210)}...`
+            : `Truyện dài Tiếng Việt (~${words} từ) chia chương đọc & nghe sách nói không giới hạn.`,
+          category: inferredCategory,
+          ageBands: ['6-8', '9-11', '12-14', '15-18'],
+          locale: 'vi',
+          availableLocales: ['vi'],
+          coverAssetRef:
+            CATEGORY_FALLBACK_ART[inferredCategory] || 'img-story-sunny-farm',
+          storyFormat: 'long_story',
+          chapterCount,
+          totalDurationSec: estimatedMinutes * 60,
+          hasAudio: true,
+          estimatedMinutes,
+        },
+      };
+    });
+
+  feedCache.set(cacheKey, { fetchedAt: Date.now(), items });
+  return items;
+}
+
+// ---------- Adapter 1D: Internet Archive Children's Audiobooks (MP3) ----------
+
+interface ArchiveDoc {
+  identifier?: string;
+  title?: string | string[];
+  creator?: string | string[];
+  description?: string | string[];
+}
+
+const ARCHIVE_CATEGORY_TOPIC: Record<StoryCategoryKey, string> = {
+  fables: '(fairy tales OR fables OR aesop)',
+  animals: '(animals OR nature OR jungle)',
+  bedtime: '(bedtime OR children OR lullaby)',
+  adventure: '(adventure OR treasure OR voyage)',
+  science: '(science OR nature OR discovery)',
+  'life-skills': '(children OR youth OR kindness)',
+  classics: '(children OR fairy tales OR classics)',
+};
+
+function firstString(val?: string | string[]): string {
+  if (Array.isArray(val)) return String(val[0] || '');
+  return typeof val === 'string' ? val : '';
+}
+
+async function fetchArchiveOrgItems(
+  source: StorySourceConfig,
+  options: { category?: StoryCategoryKey; q?: string }
+): Promise<ResolvedFeedItem[]> {
+  const topicClause = options.q?.trim()
+    ? `(${options.q.trim().replace(/[^a-zA-Z0-9\s-]/g, ' ').slice(0, 60)})`
+    : options.category
+      ? ARCHIVE_CATEGORY_TOPIC[options.category]
+      : '(children OR fairy tales)';
+
+  const query = `collection:librivoxaudio AND subject:${topicClause} AND mediatype:audio`;
+  const url = new URL(source.baseUrl);
+  url.searchParams.set('q', query);
+  url.searchParams.append('fl[]', 'identifier');
+  url.searchParams.append('fl[]', 'title');
+  url.searchParams.append('fl[]', 'creator');
+  url.searchParams.append('fl[]', 'description');
+  url.searchParams.append('sort[]', 'downloads desc');
+  url.searchParams.set('output', 'json');
+  url.searchParams.set('rows', '12');
+
+  const cacheKey = `archive_org:${source.id}:${url.toString()}`;
+  const cached = feedCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.items;
+  }
+
+  const res = await safeExternalFetch(url.toString(), {
+    timeoutMs: 10_000,
+    maxBytes: 1_200_000,
+    accept: 'application/json',
+  });
+
+  const payload = JSON.parse(res.text) as {
+    response?: { docs?: ArchiveDoc[] };
+  };
+  const docs = Array.isArray(payload.response?.docs) ? payload.response!.docs! : [];
+
+  const items: ResolvedFeedItem[] = docs
+    .filter((d) => typeof d.identifier === 'string' && d.identifier.trim().length > 0)
+    .map((doc) => {
+      const id = doc.identifier!.trim();
+      const title = firstString(doc.title).trim().slice(0, 140) || id;
+      const author = firstString(doc.creator).trim().slice(0, 100) || 'LibriVox / Internet Archive';
+      const desc = stripHtmlToParagraphs(firstString(doc.description));
+      const inferredCategory =
+        options.category || inferCategoryFromText(`${title} ${desc}`, source.categories);
+      const cover =
+        sanitizeExternalMediaUrl(`https://archive.org/services/img/${id}`) ||
+        CATEGORY_FALLBACK_ART[inferredCategory] ||
+        'img-story-sunny-farm';
+
+      return {
+        catalog: {
+          externalId: id,
+          sourceId: source.id,
+          sourceName: source.name,
+          adapterType: 'archive_org',
+          title,
+          author,
+          summary: (desc || `Public-domain audiobook by ${author}.`).slice(0, 240),
+          category: inferredCategory,
+          ageBands: ['3-5', '6-8', '9-11', '12-14'],
+          locale: source.defaultLocale || 'en',
+          availableLocales: [source.defaultLocale || 'en'],
+          coverAssetRef: cover,
+          storyFormat: 'audiobook',
+          hasAudio: true,
+          estimatedMinutes: 35,
+        },
+      };
+    });
+
+  feedCache.set(cacheKey, { fetchedAt: Date.now(), items });
+  return items;
 }
 
 // ---------- Adapter 2: Gutendex (Project Gutenberg Open API) ----------
@@ -539,10 +937,17 @@ async function fetchRssSourceItems(
   }
 
   const res = await safeExternalFetch(source.baseUrl, {
-    timeoutMs: 8500,
+    timeoutMs: 10_000,
     maxBytes: 1_500_000,
     accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml',
   });
+
+  const head = res.text.trimStart().slice(0, 200).toLowerCase();
+  if (head.startsWith('<!doctype html') || head.startsWith('<html')) {
+    throw new Error(
+      'Địa chỉ này trả về trang HTML thay vì dữ liệu RSS/Atom hợp lệ.'
+    );
+  }
 
   const items = parseRssOrAtomFeed(res.text, source);
   feedCache.set(cacheKey, { fetchedAt: Date.now(), items });
@@ -682,6 +1087,12 @@ async function fetchItemsForSource(
   switch (source.adapterType) {
     case 'curated_library':
       return fetchCuratedSourceItems(source);
+    case 'librivox':
+      return fetchLibriVoxItems(source, options);
+    case 'wikisource':
+      return fetchWikisourceViItems(source, options);
+    case 'archive_org':
+      return fetchArchiveOrgItems(source, options);
     case 'gutendex':
       return fetchGutendexItems(source, options);
     case 'rss':
@@ -828,6 +1239,359 @@ export async function importStoryFromSource(params: {
     return { story: saved, alreadyExisted: false };
   }
 
+  // 1B. LibriVox Public Domain Audiobooks (Multi-Chapter Human-Narrated MP3)
+  if (source.adapterType === 'librivox') {
+    if (!/^\d{1,8}$/.test(params.externalId)) {
+      throw new Error('Mã sách nói LibriVox không hợp lệ.');
+    }
+    const detailUrl = new URL(source.baseUrl);
+    detailUrl.searchParams.set('id', params.externalId);
+    detailUrl.searchParams.set('format', 'json');
+    detailUrl.searchParams.set('extended', '1');
+
+    const detailRes = await safeExternalFetch(detailUrl.toString(), {
+      timeoutMs: 11_000,
+      maxBytes: 1_800_000,
+      accept: 'application/json',
+      allowedHostSuffixes: ['librivox.org'],
+    });
+    const payload = JSON.parse(detailRes.text) as { books?: LibriVoxBook[] };
+    const book = payload.books?.[0];
+    if (!book?.title) {
+      throw new Error('Không đọc được thông tin sách nói từ LibriVox.');
+    }
+
+    const cleanDesc = stripHtmlToParagraphs(book.description || '');
+    const genreText = (book.genres ?? []).map((g) => g.name || '').join(' ');
+    const category = inferCategoryFromText(
+      `${book.title} ${genreText} ${cleanDesc}`,
+      source.categories
+    );
+    const locale = mapLibriVoxLanguageToLocale(book.language);
+    const authorName =
+      (book.authors ?? [])
+        .map((a) => [a.first_name, a.last_name].filter(Boolean).join(' ').trim())
+        .filter(Boolean)
+        .join(', ') || 'LibriVox Classic';
+    const coverAssetRef =
+      extractArchiveCoverFromUrl(book.url_iarchive) ||
+      CATEGORY_FALLBACK_ART[category] ||
+      'img-story-sunny-farm';
+
+    const sections = Array.isArray(book.sections) ? book.sections.slice(0, 40) : [];
+    const fallbackArt = CATEGORY_FALLBACK_ART[category] || 'img-story-sunny-farm';
+    let totalDurationSec = Number(book.totaltimesecs) || 0;
+
+    const segments: StorySegment[] = sections
+      .map((sec, idx) => {
+        const audioUrl = sanitizeExternalMediaUrl(sec.listen_url);
+        const chapterTitle =
+          stripHtmlToParagraphs(sec.title || '') || `Chapter ${idx + 1}`;
+        const durationSec = Number(sec.playtime) || undefined;
+        const readers = (sec.readers ?? [])
+          .map((r) => r.display_name)
+          .filter(Boolean)
+          .join(', ');
+
+        const introBody =
+          idx === 0 && cleanDesc
+            ? `${chapterTitle}\n\n${cleanDesc}`
+            : `${book.title} — ${chapterTitle}${readers ? `\n\nNarrated by ${readers}.` : ''}\n\nPress Play on the Audiobook Player to listen to this full MP3 chapter with seek, speed, and sleep timer controls.`;
+
+        return {
+          id: `${storyId}-seg-${String(idx + 1).padStart(2, '0')}`,
+          order: idx + 1,
+          assetRef: idx === 0 ? coverAssetRef : fallbackArt,
+          chapterTitle,
+          durationSec,
+          textByLocale: {
+            [locale]: introBody,
+          },
+          explanationByLocale: {
+            vi: readers
+              ? `Chương ${idx + 1}/${sections.length} · Giọng đọc: ${readers}`
+              : `Chương ${idx + 1}/${sections.length} · Sách nói MP3 bản đầy đủ`,
+            en: readers
+              ? `Chapter ${idx + 1} of ${sections.length} · Read by ${readers}`
+              : `Chapter ${idx + 1} of ${sections.length} · Full MP3 audiobook chapter`,
+          },
+          ...(audioUrl ? { audioUrlByLocale: { [locale]: audioUrl } } : {}),
+        };
+      })
+      .filter((s) => Boolean(s.audioUrlByLocale?.[locale] || s.textByLocale[locale]));
+
+    if (segments.length === 0) {
+      throw new Error('Sách nói này hiện chưa có tệp âm thanh chương khả dụng.');
+    }
+    if (!totalDurationSec) {
+      totalDurationSec = segments.reduce((sum, s) => sum + (s.durationSec || 300), 0);
+    }
+
+    const story: StoryBook = {
+      id: storyId,
+      schemaVersion: 1,
+      learningPackageId: '',
+      ageBands: source.ageBands.length > 0 ? source.ageBands : ['6-8', '9-11', '12-14'],
+      coverAssetRef,
+      availableLocales: [locale],
+      availableExplanationLocales: ['vi', 'en'],
+      titles: {
+        [locale]: book.title.trim().slice(0, 140),
+        vi: book.title.trim().slice(0, 140),
+      },
+      summaries: {
+        [locale]: (cleanDesc || `Full audiobook by ${authorName}.`).slice(0, 260),
+        vi: `${(cleanDesc || `Sách nói đầy đủ của tác giả ${authorName}.`).slice(0, 220)} (${segments.length} chương MP3)`,
+      },
+      segments,
+      storyFormat: 'audiobook',
+      chapterCount: segments.length,
+      totalDurationSec,
+      category,
+      sourceId: source.id,
+      sourceName: source.name.vi,
+      externalId: params.externalId,
+      author: authorName.slice(0, 100),
+      status: 'published',
+      publishedVersion: 1,
+      archivedAt: null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const saved = await upsertCmsStory(story);
+    return { story: saved, alreadyExisted: false };
+  }
+
+  // 1C. Vietnamese Wikisource — full long-form Vietnamese folktale / classic reading
+  if (source.adapterType === 'wikisource') {
+    if (!/^\d{1,10}$/.test(params.externalId)) {
+      throw new Error('Mã trang Wikisource không hợp lệ.');
+    }
+    const parseUrl = new URL(source.baseUrl);
+    parseUrl.searchParams.set('action', 'parse');
+    parseUrl.searchParams.set('pageid', params.externalId);
+    parseUrl.searchParams.set('prop', 'text|displaytitle');
+    parseUrl.searchParams.set('format', 'json');
+
+    const parseRes = await safeExternalFetch(parseUrl.toString(), {
+      timeoutMs: 11_000,
+      maxBytes: 2_000_000,
+      accept: 'application/json',
+      allowedHostSuffixes: ['wikisource.org'],
+    });
+    const payload = JSON.parse(parseRes.text) as {
+      parse?: { title?: string; text?: { '*'?: string } };
+    };
+    const rawHtml = payload.parse?.text?.['*'] || '';
+    const title = stripHtmlToParagraphs(payload.parse?.title || '').slice(0, 140);
+    if (!title || !rawHtml) {
+      throw new Error('Không đọc được toàn văn truyện từ Wikisource.');
+    }
+
+    const cleanText = cleanWikisourceHtml(rawHtml);
+    if (cleanText.length < 80) {
+      throw new Error('Trang này chưa có đủ nội dung truyện để đọc dài.');
+    }
+
+    const category = inferCategoryFromText(`${title} ${cleanText.slice(0, 500)}`, source.categories);
+    const coverAssetRef = CATEGORY_FALLBACK_ART[category] || 'img-story-sunny-farm';
+    const segments = splitPlainTextToSegments({
+      storyId,
+      text: cleanText,
+      locale: 'vi',
+      coverAssetRef,
+      category,
+      maxPages: 30,
+      targetChars: 1050,
+      chapterPrefix: 'Phần',
+    });
+
+    const summarySnippet = cleanText.replace(/\s+/g, ' ').slice(0, 230);
+    const wordCount = cleanText.split(/\s+/).filter(Boolean).length;
+    const totalDurationSec = Math.max(240, Math.round((wordCount / 145) * 60));
+
+    const story: StoryBook = {
+      id: storyId,
+      schemaVersion: 1,
+      learningPackageId: '',
+      ageBands: source.ageBands.length > 0 ? source.ageBands : ['6-8', '9-11', '12-14', '15-18'],
+      coverAssetRef,
+      availableLocales: ['vi'],
+      availableExplanationLocales: ['vi', 'en'],
+      titles: {
+        vi: title,
+        en: title,
+      },
+      summaries: {
+        vi: `${summarySnippet}...`,
+        en: `${summarySnippet}...`,
+      },
+      segments,
+      storyFormat: 'long_story',
+      chapterCount: segments.length,
+      totalDurationSec,
+      category,
+      sourceId: source.id,
+      sourceName: source.name.vi,
+      externalId: params.externalId,
+      author: 'Kho Văn Học & Cổ Tích Mở (vi.wikisource.org)',
+      status: 'published',
+      publishedVersion: 1,
+      archivedAt: null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const saved = await upsertCmsStory(story);
+    return { story: saved, alreadyExisted: false };
+  }
+
+  // 1D. Internet Archive Children's Audiobooks (MP3)
+  if (source.adapterType === 'archive_org') {
+    if (!/^[a-zA-Z0-9._-]{2,100}$/.test(params.externalId)) {
+      throw new Error('Mã sách nói Internet Archive không hợp lệ.');
+    }
+    const metaUrl = `https://archive.org/metadata/${encodeURIComponent(params.externalId)}`;
+    const metaRes = await safeExternalFetch(metaUrl, {
+      timeoutMs: 11_000,
+      maxBytes: 2_000_000,
+      accept: 'application/json',
+      allowedHostSuffixes: ['archive.org'],
+    });
+    const meta = JSON.parse(metaRes.text) as {
+      metadata?: {
+        title?: string | string[];
+        creator?: string | string[];
+        description?: string | string[];
+      };
+      files?: Array<{
+        name?: string;
+        format?: string;
+        title?: string;
+        track?: string;
+        length?: string;
+      }>;
+    };
+
+    const title = firstString(meta.metadata?.title).trim().slice(0, 140) || params.externalId;
+    const authorName =
+      firstString(meta.metadata?.creator).trim().slice(0, 100) ||
+      'LibriVox / Internet Archive';
+    const cleanDesc = stripHtmlToParagraphs(firstString(meta.metadata?.description));
+    const category = inferCategoryFromText(`${title} ${cleanDesc}`, source.categories);
+    const coverAssetRef =
+      sanitizeExternalMediaUrl(`https://archive.org/services/img/${params.externalId}`) ||
+      CATEGORY_FALLBACK_ART[category] ||
+      'img-story-sunny-farm';
+    const fallbackArt = CATEGORY_FALLBACK_ART[category] || 'img-story-sunny-farm';
+
+    const allFiles = Array.isArray(meta.files) ? meta.files : [];
+    const prefer64 = allFiles.filter(
+      (f) => f.name && /_64kb\.mp3$/i.test(f.name)
+    );
+    const prefer128 = allFiles.filter(
+      (f) => f.name && /_128kb\.mp3$/i.test(f.name)
+    );
+    const fallbackMp3 = allFiles.filter(
+      (f) => f.name && /\.mp3$/i.test(f.name) && !/_64kb\.mp3$/i.test(f.name)
+    );
+    const chosenTracks = (
+      prefer64.length > 0
+        ? prefer64
+        : prefer128.length > 0
+          ? prefer128
+          : fallbackMp3
+    )
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+      .slice(0, 40);
+
+    if (chosenTracks.length === 0) {
+      throw new Error('Không tìm thấy tệp chương MP3 trong đầu sách này.');
+    }
+
+    const locale = source.defaultLocale || 'en';
+    const segments: StorySegment[] = chosenTracks.map((track, idx) => {
+      const encodedName = (track.name || '')
+        .split('/')
+        .map((part) => encodeURIComponent(part))
+        .join('/');
+      const mp3Url = sanitizeExternalMediaUrl(
+        `https://archive.org/download/${encodeURIComponent(params.externalId)}/${encodedName}`
+      );
+      const chapterTitle =
+        (track.title && track.title.trim()) || `Chapter ${idx + 1}`;
+      const lenStr = track.length || '';
+      let durationSec: number | undefined;
+      if (lenStr.includes(':')) {
+        const parts = lenStr.split(':').map((n) => Number(n));
+        if (parts.length === 2 && parts.every(Number.isFinite)) {
+          durationSec = parts[0] * 60 + parts[1];
+        } else if (parts.length === 3 && parts.every(Number.isFinite)) {
+          durationSec = parts[0] * 3600 + parts[1] * 60 + parts[2];
+        }
+      } else if (Number.isFinite(Number(lenStr)) && Number(lenStr) > 0) {
+        durationSec = Math.round(Number(lenStr));
+      }
+
+      const bodyText =
+        idx === 0 && cleanDesc
+          ? `${chapterTitle}\n\n${cleanDesc}`
+          : `${title} — ${chapterTitle}\n\nPress Play on the Audiobook Player to listen to this full MP3 chapter.`;
+
+      return {
+        id: `${storyId}-seg-${String(idx + 1).padStart(2, '0')}`,
+        order: idx + 1,
+        assetRef: idx === 0 ? coverAssetRef : fallbackArt,
+        chapterTitle,
+        durationSec,
+        textByLocale: { [locale]: bodyText },
+        explanationByLocale: {
+          vi: `Chương ${idx + 1}/${chosenTracks.length} · Sách nói MP3 (Internet Archive)`,
+          en: `Chapter ${idx + 1} of ${chosenTracks.length} · Full MP3 Audiobook`,
+        },
+        ...(mp3Url ? { audioUrlByLocale: { [locale]: mp3Url } } : {}),
+      };
+    });
+
+    const totalDurationSec = segments.reduce(
+      (sum, s) => sum + (s.durationSec || 300),
+      0
+    );
+
+    const story: StoryBook = {
+      id: storyId,
+      schemaVersion: 1,
+      learningPackageId: '',
+      ageBands: source.ageBands.length > 0 ? source.ageBands : ['3-5', '6-8', '9-11', '12-14'],
+      coverAssetRef,
+      availableLocales: [locale],
+      availableExplanationLocales: ['vi', 'en'],
+      titles: {
+        [locale]: title,
+        vi: title,
+      },
+      summaries: {
+        [locale]: (cleanDesc || `Full audiobook by ${authorName}.`).slice(0, 260),
+        vi: `${(cleanDesc || `Sách nói đầy đủ của ${authorName}.`).slice(0, 220)} (${segments.length} chương MP3)`,
+      },
+      segments,
+      storyFormat: 'audiobook',
+      chapterCount: segments.length,
+      totalDurationSec,
+      category,
+      sourceId: source.id,
+      sourceName: source.name.vi,
+      externalId: params.externalId,
+      author: authorName.slice(0, 100),
+      status: 'published',
+      publishedVersion: 1,
+      archivedAt: null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const saved = await upsertCmsStory(story);
+    return { story: saved, alreadyExisted: false };
+  }
+
   // 2. Gutendex (Project Gutenberg) — fetch metadata & plain text securely
   if (source.adapterType === 'gutendex') {
     if (!/^\d{1,8}$/.test(params.externalId)) {
@@ -836,7 +1600,7 @@ export async function importStoryFromSource(params: {
     const base = source.baseUrl.replace(/\/+$/, '');
     const detailUrl = `${base}/${params.externalId}`;
     const detailRes = await safeExternalFetch(detailUrl, {
-      timeoutMs: 10_000,
+      timeoutMs: 12_000,
       maxBytes: 500_000,
       accept: 'application/json',
     });
@@ -870,7 +1634,7 @@ export async function importStoryFromSource(params: {
       const safeTextUrl = sanitizeExternalMediaUrl(textUrl);
       if (safeTextUrl) {
         const textRes = await safeExternalFetch(safeTextUrl, {
-          timeoutMs: 12_000,
+          timeoutMs: 14_000,
           maxBytes: 1_800_000,
           accept: 'text/plain',
           allowedHostSuffixes: ['gutenberg.org', 'gutendex.com'],
@@ -892,14 +1656,15 @@ export async function importStoryFromSource(params: {
       locale,
       coverAssetRef,
       category,
-      maxPages: 12,
+      maxPages: 35,
+      targetChars: 1050,
     });
 
     const isKids = /children|juvenile|fairy|fable|nursery/i.test(subjectsJoined);
     const story: StoryBook = {
       id: storyId,
       schemaVersion: 1,
-      learningPackageId: 'lp-fruits-a1',
+      learningPackageId: '',
       ageBands: isKids ? ['6-8', '9-11'] : ['12-14', '15-18'],
       coverAssetRef,
       availableLocales: [locale],
@@ -913,6 +1678,8 @@ export async function importStoryFromSource(params: {
         vi: `${summaryText.slice(0, 220)} (${authorName})`,
       },
       segments,
+      storyFormat: 'long_story',
+      chapterCount: segments.length,
       category,
       sourceId: source.id,
       sourceName: source.name.vi,

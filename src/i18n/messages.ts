@@ -1,7 +1,9 @@
 export interface UiMessages {
   nav: {
+    home: string;
     learn: string;
     stories: string;
+    audiobooks: string;
     parents: string;
     admin: string;
     startLesson: string;
@@ -81,6 +83,7 @@ export interface UiMessages {
     accessibilityHeading: string;
     reducedMotion: string;
     dailyLimit: string;
+    storyDailyLimit: string;
     minutesUnit: string;
     progressHeading: string;
     noProgressYet: string;
@@ -127,11 +130,13 @@ export interface UiMessages {
 
 const VI_MESSAGES: UiMessages = {
   nav: {
+    home: 'Trang chủ',
     learn: 'Học bài',
     stories: 'Truyện kể',
+    audiobooks: 'Sách nói',
     parents: 'Phụ huynh',
     admin: 'Quản trị',
-    startLesson: 'Bắt đầu học',
+    startLesson: 'Vào học ngay',
     languageSwitchLabel: 'Ngôn ngữ hiển thị',
   },
   hero: {
@@ -142,7 +147,7 @@ const VI_MESSAGES: UiMessages = {
     explanationMeta: 'Giải thích',
     ageBand: 'Độ tuổi 3–5',
     continueButton: 'Vào bài học ngay',
-    openStoryButton: 'Mở thư viện truyện kể',
+    openStoryButton: 'Mở Sách nói & Truyện dài',
   },
   modes: {
     heading: 'Chọn cách trải nghiệm cho cùng một gói bài học',
@@ -179,7 +184,7 @@ const VI_MESSAGES: UiMessages = {
     checkpointSaved: 'Đã lưu tiến độ',
   },
   story: {
-    heading: 'Thư viện truyện đa ngôn ngữ',
+    heading: 'Thư viện Sách nói & Truyện kể',
     narrationLanguage: 'Ngôn ngữ đọc truyện',
     voiceSelect: 'Giọng đọc khả dụng',
     speedLabel: 'Tốc độ đọc',
@@ -212,7 +217,8 @@ const VI_MESSAGES: UiMessages = {
     narrationLocale: 'Ngôn ngữ đọc truyện',
     accessibilityHeading: 'Trợ năng & thời lượng học',
     reducedMotion: 'Giảm chuyển động',
-    dailyLimit: 'Thời lượng khuyến nghị mỗi ngày',
+    dailyLimit: 'Thời lượng học bài mỗi ngày',
+    storyDailyLimit: 'Thời lượng truyện kể mỗi ngày',
     minutesUnit: 'phút',
     progressHeading: 'Tiến độ học tập của bé',
     noProgressYet: 'Bé chưa hoàn thành hoạt động nào trong phiên này.',
@@ -264,8 +270,10 @@ const VI_MESSAGES: UiMessages = {
 
 const EN_MESSAGES: UiMessages = {
   nav: {
+    home: 'Home',
     learn: 'Learn',
     stories: 'Stories',
+    audiobooks: 'Audiobooks',
     parents: 'Parents',
     admin: 'Admin',
     startLesson: 'Start Lesson',
@@ -279,7 +287,7 @@ const EN_MESSAGES: UiMessages = {
     explanationMeta: 'Explanation',
     ageBand: 'Ages 3–5',
     continueButton: 'Start Learning',
-    openStoryButton: 'Open Picture Stories',
+    openStoryButton: 'Open Audiobooks & Stories',
   },
   modes: {
     heading: 'Choose an experience mode for this learning package',
@@ -349,7 +357,8 @@ const EN_MESSAGES: UiMessages = {
     narrationLocale: 'Narration language',
     accessibilityHeading: 'Accessibility & session rhythm',
     reducedMotion: 'Reduced motion',
-    dailyLimit: 'Suggested daily duration',
+    dailyLimit: 'Daily lesson time limit',
+    storyDailyLimit: 'Daily picture story time limit',
     minutesUnit: 'min',
     progressHeading: 'Learner progress',
     noProgressYet: 'No lesson activity saved yet for this learner.',

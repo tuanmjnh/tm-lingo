@@ -920,27 +920,88 @@ export function ParentPanel({
                 />
               </label>
 
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-sm text-slate-700 dark:text-slate-300 tabular-nums">
-                  <span>{messages.parent.dailyLimit}</span>
-                  <span className="font-semibold">
-                    {activeLearner.preferences.dailyMinutesLimit}{' '}
-                    {messages.parent.minutesUnit}
+              <div className="space-y-4 pt-2 border-t border-slate-100 dark:border-slate-800/80">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-sm text-slate-700 dark:text-slate-300 tabular-nums">
+                    <div>
+                      <span className="font-medium text-slate-800 dark:text-slate-100 block">
+                        {messages.parent.dailyLimit}
+                      </span>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        {isVi
+                          ? 'Áp dụng cho phần Học bài (từ vựng, nghe chọn, ghép cặp)'
+                          : 'Applies to interactive lessons (vocabulary, listening, games)'}
+                      </span>
+                    </div>
+                    <span className="font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                      {activeLearner.preferences.dailyMinutesLimit}{' '}
+                      {messages.parent.minutesUnit}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={5}
+                    max={60}
+                    step={5}
+                    value={activeLearner.preferences.dailyMinutesLimit}
+                    onChange={(e) =>
+                      void handlePrefChange({
+                        dailyMinutesLimit: Number(e.target.value),
+                      })
+                    }
+                    className="w-full accent-sky-600"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-sm text-slate-700 dark:text-slate-300 tabular-nums">
+                    <div>
+                      <span className="font-medium text-slate-800 dark:text-slate-100 block">
+                        {messages.parent.storyDailyLimit}
+                      </span>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        {isVi
+                          ? 'Áp dụng riêng cho phần Truyện kể ngắn có tranh tương tác'
+                          : 'Configured separately for short interactive picture stories'}
+                      </span>
+                    </div>
+                    <span className="font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                      {activeLearner.preferences.storyDailyMinutesLimit ?? 15}{' '}
+                      {messages.parent.minutesUnit}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={5}
+                    max={60}
+                    step={5}
+                    value={activeLearner.preferences.storyDailyMinutesLimit ?? 15}
+                    onChange={(e) =>
+                      void handlePrefChange({
+                        storyDailyMinutesLimit: Number(e.target.value),
+                      })
+                    }
+                    className="w-full accent-indigo-600"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between gap-4 rounded-xl bg-slate-50 dark:bg-slate-950/70 border border-slate-200/80 dark:border-slate-800 px-3.5 py-2.5 text-xs">
+                  <div className="space-y-0.5">
+                    <span className="font-semibold text-slate-800 dark:text-slate-100 block">
+                      {isVi
+                        ? 'Sách nói & Truyện dài nhiều chương'
+                        : 'Audiobooks & Long-Form Stories'}
+                    </span>
+                    <span className="text-slate-500 dark:text-slate-400">
+                      {isVi
+                        ? 'Tách riêng hoàn toàn khỏi bộ đếm giờ để bé nghe thư giãn hoặc trước khi ngủ.'
+                        : 'Always decoupled from daily timers for calm listening and bedtime.'}
+                    </span>
+                  </div>
+                  <span className="font-semibold text-emerald-700 dark:text-emerald-400 whitespace-nowrap shrink-0">
+                    {isVi ? 'Không giới hạn' : 'Unlimited'}
                   </span>
                 </div>
-                <input
-                  type="range"
-                  min={5}
-                  max={60}
-                  step={5}
-                  value={activeLearner.preferences.dailyMinutesLimit}
-                  onChange={(e) =>
-                    void handlePrefChange({
-                      dailyMinutesLimit: Number(e.target.value),
-                    })
-                  }
-                  className="w-full accent-sky-600"
-                />
               </div>
             </div>
           </section>
