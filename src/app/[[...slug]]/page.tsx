@@ -5,18 +5,11 @@ import { App } from '../../App';
 import { AppLoadingScreen } from '../../components/AppLoadingScreen';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
 
-export default function AdminPortalPage() {
+export default function SpaAppPage() {
   return (
     <ErrorBoundary>
-      <Suspense
-        fallback={
-          <AppLoadingScreen
-            label="TM-Lingo"
-            subtitle="Đang mở không gian quản trị..."
-          />
-        }
-      >
-        <App initialTab="admin" />
+      <Suspense fallback={<AppLoadingScreen />}>
+        <App />
       </Suspense>
     </ErrorBoundary>
   );

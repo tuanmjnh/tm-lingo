@@ -105,15 +105,47 @@ export function App({ initialTab = 'learn' }: AppProps) {
       }
     }
 
-    if (initialTab === 'admin' || pathname === '/admin') {
+    const pathSegment = (pathname || (typeof window !== 'undefined' ? window.location.pathname : ''))
+      .replace(/^\/+/, '')
+      .split('/')[0];
+
+    if (initialTab === 'admin' || pathSegment === 'admin') {
       setActiveTab('admin');
       return;
     }
-    const param = new URLSearchParams(window.location.search).get('tab');
-    if (param === 'stories' || param === 'parents' || param === 'admin') {
-      setActiveTab(param);
+    if (pathSegment === 'stories' || pathSegment === 'parents' || pathSegment === 'learn') {
+      setActiveTab(pathSegment as AppTab);
+      return;
+    }
+    const param = typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('tab')
+      : null;
+    if (param === 'stories' || param === 'parents' || param === 'admin' || param === 'learn') {
+      setActiveTab(param as AppTab);
     }
   }, [initialTab, pathname]);
+
+  // SPA browser navigation (Back / Forward button handling)
+  useEffect(() => {
+    const handlePopState = () => {
+      const pathSegment = window.location.pathname.replace(/^\/+/, '').split('/')[0];
+      if (pathSegment === 'admin') {
+        setActiveTab('admin');
+      } else if (pathSegment === 'stories' || pathSegment === 'parents' || pathSegment === 'learn') {
+        setActiveTab(pathSegment as AppTab);
+      } else {
+        const param = new URLSearchParams(window.location.search).get('tab');
+        if (param === 'stories' || param === 'parents' || param === 'admin' || param === 'learn') {
+          setActiveTab(param as AppTab);
+        } else {
+          setActiveTab('learn');
+        }
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   const scrollToLandingSection = useCallback(
     (sectionId: 'pathways' | 'method' | 'start') => {
@@ -647,10 +679,9 @@ export function App({ initialTab = 'learn' }: AppProps) {
       await apiClient.staffLogout();
       setStaffUser(null);
       setMediaAssets([]);
-      if (pathname === '/admin') {
-        router.push('/');
-      } else {
-        setActiveTab('learn');
+      setActiveTab('learn');
+      if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+        window.history.pushState(null, '', '/');
       }
     } finally {
       setStaffBusy(false);
@@ -767,10 +798,9 @@ export function App({ initialTab = 'learn' }: AppProps) {
 
   const leaveAdminToHome = () => {
     setKidFocusMode(false);
-    if (pathname === '/admin') {
-      router.push('/');
-    } else {
-      setActiveTab('learn');
+    setActiveTab('learn');
+    if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+      window.history.pushState(null, '', '/');
     }
   };
 
@@ -784,11 +814,13 @@ export function App({ initialTab = 'learn' }: AppProps) {
       setParentGateOpen(true);
       return;
     }
-    if (pathname === '/admin' && tab !== 'admin') {
-      router.push(tab === 'learn' ? '/' : `/?tab=${tab}`);
-      return;
-    }
     setActiveTab(tab);
+    if (typeof window !== 'undefined') {
+      const targetPath = tab === 'learn' ? '/' : `/${tab}`;
+      if (window.location.pathname !== targetPath) {
+        window.history.pushState(null, '', targetPath);
+      }
+    }
   };
 
   const getPackageCoverRef = (pkgId: string, topicId?: string): string => {
