@@ -1,40 +1,12 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import dotenv from 'dotenv';
 import { z } from 'zod';
 
-function loadDotEnvFile(filename: string): void {
-  const filePath = path.resolve(process.cwd(), filename);
-  if (!fs.existsSync(filePath)) return;
-
-  const content = fs.readFileSync(filePath, 'utf-8');
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-
-    const eqIndex = line.indexOf('=');
-    if (eqIndex <= 0) continue;
-
-    const key = line.slice(0, eqIndex).trim();
-    let value = line.slice(eqIndex + 1).trim();
-
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-
-    // Never overwrite non-empty variables already provided by host/secret manager
-    if (!process.env[key]?.trim() && value) {
-      process.env[key] = value;
-    }
-  }
-}
-
 // Load .env.local first (higher precedence for local overrides), then .env
-loadDotEnvFile('.env.local');
-loadDotEnvFile('.env');
+dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 const EPHEMERAL_SESSION_FALLBACK = crypto.randomBytes(32).toString('hex');
 

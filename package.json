@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --env-file-if-exists=.env ./node_modules/next/dist/bin/next dev",
+    "dev": "dotenv -e .env -- next dev",
     "build": "next build",
-    "start": "node --env-file-if-exists=.env ./node_modules/next/dist/bin/next start",
+    "start": "dotenv -e .env -- next start",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -15,18 +15,19 @@
     "@google/genai": "^3.6.1",
     "@tailwindcss/postcss": "^4.3.5",
     "@tuanmjnh/tm-ai-client": "^0.4.1",
-    "@tuanmjnh/tm-hub-client": "^1.2.0",
+    "@tuanmjnh/tm-hub-client": "^1.2.1",
     "@types/node": "^22.13.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/web-push": "^3.6.4",
+    "dotenv": "^16.4.7",
     "eslint": "^9.0.0",
     "firebase": "^11.0.0",
     "jose": "^6.2.18",
     "lucide-react": "^1.76.0",
     "mongodb": "^6.14.0",
     "motion": "^14.14.0",
-    "next": "^15.2.1",
+    "next": "15.2.1",
     "postcss": "^8.5.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -34,5 +35,8 @@
     "typescript": "^5.8.0",
     "web-push": "^3.6.7",
     "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^8.0.0"
   }
 }
