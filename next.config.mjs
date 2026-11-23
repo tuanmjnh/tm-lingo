@@ -1,16 +1,23 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { NextConfig } from 'next';
-import { PHASE_DEVELOPMENT_SERVER } from 'next/constants';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export default function createNextConfig(phase: string): NextConfig {
-  return {
-    distDir: phase === PHASE_DEVELOPMENT_SERVER ? '.next-dev' : '.next',
-    reactStrictMode: true,
-    outputFileTracingRoot: __dirname,
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: false,
+  outputFileTracingRoot: __dirname,
+  allowedDevOrigins: [
+    '**.run.app',
+    '*.run.app',
+    '**.googleusercontent.com',
+    '**.aistudio.google.com',
+    'aistudio.google.com',
+    'localhost',
+    '127.0.0.1',
+  ],
+  serverExternalPackages: ['@tuanmjnh/tm-ai-client', '@tuanmjnh/tm-hub-client'],
   images: {
     remotePatterns: [
       {
@@ -57,5 +64,6 @@ export default function createNextConfig(phase: string): NextConfig {
       },
     ];
   },
-  };
-}
+};
+
+export default nextConfig;

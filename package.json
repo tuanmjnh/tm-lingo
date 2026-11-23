@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 5001",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 5001",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -22,18 +22,18 @@
     "@types/web-push": "^3.6.4",
     "dotenv": "^16.4.7",
     "eslint": "^9.0.0",
-    "firebase": "^11.0.0",
+    "firebase": "^13.4.0",
     "jose": "^6.2.18",
     "lucide-react": "^1.76.0",
     "mongodb": "^6.14.0",
     "motion": "^14.14.0",
-    "next": "15.2.1",
+    "next": "^16.4.6",
     "postcss": "^8.5.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tailwindcss": "^4.3.5",
     "typescript": "^5.8.0",
     "web-push": "^3.6.7",
-    "zod": "^3.24.2"
+    "zod": "^4.6.7"
   }
 }

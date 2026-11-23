@@ -330,47 +330,62 @@ Mỗi artifact AI lưu đủ `provenance`: `sourceLocale`, `targetLocale`, `oper
 Chỉ giữ đúng các biến thực sự cần dùng (khai báo mẫu không chứa secret trong `.env.example`):
 
 ```env
-# Runtime
-NODE_ENV=development
+# Runtime (không đặt NODE_ENV trong .env; Next.js tự set cho dev/build/start)
 PORT=3000
 APP_BASE_URL=http://localhost:3000
+CAPACITOR_SERVER_URL=https://app.tm-lingo.app
+
+# Client (public, nhúng vào bundle)
+VITE_APP_NAME=TM-Lingo
+VITE_DEFAULT_INTERFACE_LOCALE=vi
+VITE_DEFAULT_LEARNING_LOCALE=en
 
 # Primary Database (server-only)
 MONGODB_URI=
-MONGODB_DATABASE=tm-lingo
+MONGODB_DATABASE=tm_lingo
 
 # Master Encryption Key cho ai_connections & storage_connections (32-byte base64, server-only)
 AI_CONFIG_SECRET=
 
 # TM-Hub Control Plane — Staff IAM / RBAC / Audit Logs (server-only)
+AUTH_PROVIDER=hub
 HUB_BASE_URL=
 HUB_APP_ID=tm-lingo
+HUB_APP_SECRET=
 HUB_DEVICE_ID=
 HUB_DEVICE_SECRET=
-# Fallback tùy chọn nếu chưa enroll device trên TM-Hub:
-HUB_APP_SECRET=
+AUTH_JWT_SECRET=
+# Alias được chấp nhận: VITE_PUBLIC_HUB_URL / NEXT_PUBLIC_HUB_URL,
+# VITE_PUBLIC_HUB_APP_ID / NEXT_PUBLIC_HUB_APP_ID, VITE_HUB_APP_SECRET
 
-# Parent Auth — Firebase (đọc từ firebase-applet-config.json hoặc biến public)
-NEXT_PUBLIC_FIREBASE_API_KEY=
-NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=
+# Parent Auth — Firebase (đọc firebase-applet-config.json, env chỉ là fallback)
 NEXT_PUBLIC_FIREBASE_PROJECT_ID=
-NEXT_PUBLIC_FIREBASE_APP_ID=
+NEXT_PUBLIC_FIREBASE_VAPID_KEY=
 
 # Family Web Push (W3C VAPID — server-only private key)
-VAPID_SUBJECT=mailto:admin@tm-lingo.app
+VAPID_SUBJECT=mailto:admin@tm-lingo.local
 VAPID_PUBLIC_KEY=
 VAPID_PRIVATE_KEY=
 
+# Session Signing Secret (server-only)
+SESSION_SECRET=
+
 # Env Fallbacks tùy chọn (chỉ dùng khi ai_connections / storage_connections trong DB còn trống)
 GEMINI_API_KEY=
+GEMINI_TEXT_MODEL=gemini-2.5-flash
+GEMINI_IMAGE_MODEL=gemini-2.5-flash-image
+GEMINI_TTS_MODEL=gemini-2.5-flash-preview-tts
+AZURE_SPEECH_KEY=
+AZURE_SPEECH_REGION=
 OBJECT_STORAGE_ENDPOINT=
-OBJECT_STORAGE_BUCKET=
+OBJECT_STORAGE_REGION=auto
+OBJECT_STORAGE_BUCKET=assets
 OBJECT_STORAGE_ACCESS_KEY=
 OBJECT_STORAGE_SECRET_KEY=
 OBJECT_STORAGE_PUBLIC_BASE_URL=
 ```
 
-*(Đã gỡ bỏ hoàn toàn `VITE_SUPABASE_*`, `SUPABASE_*` và `SEED_ADMIN_*` khỏi code và `.env.example` sau Pha 5.)*
+*(Đã gỡ bỏ hoàn toàn `VITE_SUPABASE_*`, `SUPABASE_*`, `SEED_ADMIN_*` và `SEED_ROOT_*` khỏi code, `.env.example` và `.env` local sau Pha 5.)*
 
 ---
 
