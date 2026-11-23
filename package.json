@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "next dev",
     "dev:port": "next dev -p 5001",
-    "build": "next build",
+    "build": "opennextjs-cloudflare build",
+    "build:next": "next build",
     "start": "next start",
     "pages:build": "opennextjs-cloudflare build",
     "preview": "opennextjs-cloudflare preview",
