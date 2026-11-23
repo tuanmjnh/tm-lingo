@@ -370,9 +370,14 @@ export function App({ initialTab = 'home' }: AppProps) {
         )
         .catch(() => undefined)
         .finally(() => {
-          navigator.serviceWorker.register('/push-sw.js').catch((err) => {
-            console.warn('Service worker registration failed:', err);
-          });
+          navigator.serviceWorker
+            .register('/push-sw.js', { updateViaCache: 'none' })
+            .then((reg) => {
+              void reg.update().catch(() => undefined);
+            })
+            .catch((err) => {
+              console.warn('Service worker registration failed:', err);
+            });
         });
     }
   }, []);

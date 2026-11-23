@@ -1,8 +1,8 @@
 // TM-Lingo Service Worker: Offline Cache API Strategy + Web Push Notifications
-const CACHE_SHELL = 'tm-lingo-shell-v1';
-const CACHE_LESSON = 'tm-lingo-lesson-assets-v1';
-const CACHE_STORY = 'tm-lingo-story-assets-v1';
-const CACHE_RUNTIME = 'tm-lingo-runtime-media-v1';
+const CACHE_SHELL = 'tm-lingo-shell-v2';
+const CACHE_LESSON = 'tm-lingo-lesson-assets-v2';
+const CACHE_STORY = 'tm-lingo-story-assets-v2';
+const CACHE_RUNTIME = 'tm-lingo-runtime-media-v2';
 
 const ACTIVE_CACHES = new Set([
   CACHE_SHELL,
@@ -13,7 +13,6 @@ const ACTIVE_CACHES = new Set([
 ]);
 
 const SHELL_PRECACHE_URLS = [
-  '/',
   '/manifest.json',
   '/pwa-192x192.png',
   '/pwa-512x512.png',
@@ -23,10 +22,10 @@ const SHELL_PRECACHE_URLS = [
 ];
 
 const NEVER_CACHE_PREFIXES = [
+  '/_next/',
   '/api/v1/auth/',
   '/api/v1/admin/',
   '/api/v1/notifications/',
-  '/_next/webpack-hmr',
 ];
 
 const CACHEABLE_API_PREFIXES = [
@@ -64,16 +63,22 @@ function isCacheableApiPath(pathname) {
 
 function isMediaOrStaticAsset(request, urlObj) {
   const dest = request.destination;
+  if (dest === 'script' || dest === 'style' || dest === 'document') return false;
   if (dest === 'image' || dest === 'audio' || dest === 'font') return true;
   if (
     isSameOrigin(urlObj) &&
     (urlObj.pathname.startsWith('/images/') ||
-      urlObj.pathname.startsWith('/uploads/') ||
-      urlObj.pathname.startsWith('/_next/static/'))
+      urlObj.pathname.startsWith('/uploads/'))
   ) {
     return true;
   }
   return false;
+}
+
+function isHtmlResponse(response) {
+  if (!response || response.type === 'opaque') return false;
+  const ct = (response.headers.get('content-type') || '').toLowerCase();
+  return ct.includes('text/html');
 }
 
 async function fetchAndStoreAsset(cache, rawUrl) {
@@ -294,7 +299,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          if (response && response.ok) {
+          if (response && response.ok && !isHtmlResponse(response)) {
             const copy = response.clone();
             caches
               .open(CACHE_RUNTIME)
@@ -319,13 +324,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3. Storybook / Lesson Images, Audio & Static Assets: Cache-first (with background update)
+  // 3. Storybook / Lesson Images, Audio & Media Assets: Cache-first (never cache HTML or JS)
   if (isMediaOrStaticAsset(request, urlObj)) {
     event.respondWith(
       caches.match(request).then((cached) => {
         const networkFetch = fetch(request)
           .then((response) => {
-            if (response && (response.ok || response.type === 'opaque')) {
+            if (
+              response &&
+              !isHtmlResponse(response) &&
+              (response.ok || response.type === 'opaque')
+            ) {
               const copy = response.clone();
               caches
                 .open(CACHE_RUNTIME)

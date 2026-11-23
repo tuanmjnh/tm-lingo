@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "dotenv -e .env -- next dev",
-    "build": "next build",
-    "start": "dotenv -e .env -- next start",
+    "dev": "next dev",
+    "build": "NODE_ENV=production next build",
+    "start": "NODE_ENV=production next start",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -35,8 +35,5 @@
     "typescript": "^5.8.0",
     "web-push": "^3.6.7",
     "zod": "^3.24.2"
-  },
-  "devDependencies": {
-    "dotenv-cli": "^8.0.0"
   }
 }

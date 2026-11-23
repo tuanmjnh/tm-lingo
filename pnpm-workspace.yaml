@@ -1,7 +1,0 @@
-allowBuilds:
-  '@firebase/util': true
-  protobufjs: true
-  sharp: true
-minimumReleaseAgeExclude:
-  - lucide-react@1.76.0
-  - '@tuanmjnh/tm-hub-client@1.2.1'

@@ -1,13 +1,16 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { NextConfig } from 'next';
+import { PHASE_DEVELOPMENT_SERVER } from 'next/constants';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const nextConfig: NextConfig = {
-  reactStrictMode: true,
-  outputFileTracingRoot: __dirname,
+export default function createNextConfig(phase: string): NextConfig {
+  return {
+    distDir: phase === PHASE_DEVELOPMENT_SERVER ? '.next-dev' : '.next',
+    reactStrictMode: true,
+    outputFileTracingRoot: __dirname,
   images: {
     remotePatterns: [
       {
@@ -40,7 +43,7 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        source: '/(dev-sw|sw).js',
+        source: '/(dev-sw|sw|push-sw).js',
         headers: [
           {
             key: 'Cache-Control',
@@ -54,6 +57,5 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-};
-
-export default nextConfig;
+  };
+}
