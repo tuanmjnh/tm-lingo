@@ -6,12 +6,12 @@
   "scripts": {
     "dev": "next dev",
     "dev:port": "next dev -p 5001",
-    "build": "opennextjs-cloudflare build",
-    "build:next": "next build",
+    "build": "next build",
     "start": "next start",
     "pages:build": "opennextjs-cloudflare build",
     "preview": "opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare deploy",
+    "cf-build": "opennextjs-cloudflare build",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
