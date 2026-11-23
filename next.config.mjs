@@ -19,6 +19,7 @@ const nextConfig = {
   ],
   serverExternalPackages: ['@tuanmjnh/tm-ai-client', '@tuanmjnh/tm-hub-client'],
   images: {
+    unoptimized: true,
     remotePatterns: [
       {
         protocol: 'https',
