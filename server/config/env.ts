@@ -26,12 +26,6 @@ const serverEnvSchema = z.object({
   MONGODB_URI: z.string().default(''),
   MONGODB_DATABASE: z.string().default('tm_lingo'),
 
-  // Supabase Auth & Storage (optional)
-  VITE_SUPABASE_URL: z.string().default(''),
-  VITE_SUPABASE_ANON_KEY: z.string().default(''),
-  SUPABASE_URL: z.string().default(''),
-  SUPABASE_SERVICE_ROLE_KEY: z.string().default(''),
-
   // AES-256-GCM master secret for self-managed AI & Storage providers
   AI_CONFIG_SECRET: z.string().default(''),
 
@@ -174,8 +168,6 @@ export function getRuntimeEnvironmentSummary(mongoStatus?: {
   const has = (val: string) => Boolean(val && val.trim().length > 0);
   const mongodbConfigured = has(env.MONGODB_URI);
   const tmHubConfigured = isTmHubConfigured();
-  const supabaseConfigured =
-    has(env.SUPABASE_URL) || has(env.VITE_SUPABASE_URL);
   const objectStorageConfigured =
     has(env.OBJECT_STORAGE_ENDPOINT) &&
     has(env.OBJECT_STORAGE_BUCKET) &&
@@ -203,7 +195,6 @@ export function getRuntimeEnvironmentSummary(mongoStatus?: {
       mongodbConfigured,
       mongodbConnected: mongoStatus?.connected ?? false,
       firebaseConfigured,
-      supabaseConfigured,
       authProvider: env.AUTH_PROVIDER,
       tmHubConfigured,
       hubBaseUrl: env.HUB_BASE_URL || env.VITE_PUBLIC_HUB_URL,

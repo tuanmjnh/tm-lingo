@@ -370,7 +370,7 @@ OBJECT_STORAGE_SECRET_KEY=
 OBJECT_STORAGE_PUBLIC_BASE_URL=
 ```
 
-*(Các biến `VITE_SUPABASE_*`, `SUPABASE_*`, `SEED_ADMIN_*` sẽ được đánh dấu deprecated trong giai đoạn chuyển đổi và gỡ bỏ hoàn toàn sau Pha 5.)*
+*(Đã gỡ bỏ hoàn toàn `VITE_SUPABASE_*`, `SUPABASE_*` và `SEED_ADMIN_*` khỏi code và `.env.example` sau Pha 5.)*
 
 ---
 
