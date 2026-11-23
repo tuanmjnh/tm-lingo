@@ -2,9 +2,14 @@ node_modules/
 dist/
 .next/
 .next-dev/
+.open-next/
 *.tsbuildinfo
 .env
 .env.local
 .env.*.local
 .DS_Store
 *.log
+bun.lock
+bun.lockb
+pnpm-lock.yaml
+pnpm-workspace.yaml
