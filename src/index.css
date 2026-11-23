@@ -66,6 +66,11 @@
     --accent-text-dark: #fb7185;
   }
 
+  html,
+  body {
+    overflow-x: clip;
+  }
+
   body {
     font-family: var(--font-body);
     background-color: #f6f8fb;
@@ -155,6 +160,14 @@ html.dark .surface-card {
 
 .tabular-nums {
   font-variant-numeric: tabular-nums;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

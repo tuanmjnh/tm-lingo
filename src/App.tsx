@@ -1018,13 +1018,15 @@ export function App({ initialTab = 'home' }: AppProps) {
   return (
     <div
       className={`min-h-screen flex flex-col bg-[#F6F8FB] dark:bg-[#090E1A] text-[#0F172A] dark:text-[#F1F5F9] transition-colors ${
-        hasAuthenticatedWorkspace && !isFocusStage ? 'pb-16 md:pb-0' : ''
+        hasAuthenticatedWorkspace && !isFocusStage
+          ? 'pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-0'
+          : ''
       } ${effectiveReducedMotion ? 'reduced-motion' : ''}`}
     >
       {/* Top Bar — 3-Zone Contract: Brand Wordmark | 5 Single-line Nav Links | Primary CTA + Notification + Settings */}
       {!isFocusStage && (
         <header className="sticky top-0 z-20 bg-white/92 dark:bg-[#090E1A]/90 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/90 transition-colors">
-          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4 sm:gap-6">
+          <div className="max-w-[1200px] mx-auto px-3.5 sm:px-6 lg:px-8 h-14 md:h-16 flex items-center justify-between gap-3 sm:gap-6">
             <button
               type="button"
               onClick={leaveAdminToHome}
@@ -1141,7 +1143,7 @@ export function App({ initialTab = 'home' }: AppProps) {
         </header>
       )}
 
-      <main className="flex-1 max-w-[1200px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-10">
+      <main className="flex-1 max-w-[1200px] w-full min-w-0 mx-auto px-3.5 sm:px-6 lg:px-8 py-5 sm:py-8 md:py-10 space-y-6 sm:space-y-8 md:space-y-10">
         {activeTab === 'admin' ? (
           staffUser ? (
             <AdminWorkspace
@@ -1941,7 +1943,7 @@ export function App({ initialTab = 'home' }: AppProps) {
       {hasAuthenticatedWorkspace && !isFocusStage && (
         <nav
           aria-label={isVi ? 'Điều hướng di động' : 'Mobile navigation'}
-          className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 dark:bg-slate-950/95 backdrop-blur border-t border-slate-200 dark:border-slate-800 h-16 px-2 grid"
+          className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 dark:bg-slate-950/95 backdrop-blur-md border-t border-slate-200/90 dark:border-slate-800/90 min-h-[60px] pt-1 pb-[max(0.35rem,env(safe-area-inset-bottom))] px-1.5 grid"
           style={{
             gridTemplateColumns: `repeat(${navItems.length}, minmax(0, 1fr))`,
           }}
@@ -1962,14 +1964,24 @@ export function App({ initialTab = 'home' }: AppProps) {
               <button
                 key={tabKey}
                 type="button"
+                aria-current={isActive ? 'page' : undefined}
                 onClick={() => navigateTab(tabKey)}
-                className={`flex flex-col items-center justify-center gap-1 text-[11px] font-semibold transition-colors cursor-pointer ${
+                className={`relative flex flex-col items-center justify-center gap-0.5 min-h-[48px] rounded-xl text-[11px] font-semibold transition-colors cursor-pointer ${
                   isActive
                     ? 'text-accent'
                     : 'text-slate-500 dark:text-slate-400'
                 }`}
               >
-                <Icon className="w-5 h-5" aria-hidden="true" />
+                {isActive && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute top-0.5 w-6 h-0.5 rounded-full bg-current"
+                  />
+                )}
+                <Icon
+                  className={`w-5 h-5 ${isActive ? 'stroke-[2.3]' : ''}`}
+                  aria-hidden="true"
+                />
                 <span className="truncate max-w-full px-1">{label}</span>
               </button>
             );

@@ -1,24 +1,29 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { motion } from 'motion/react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
   ArrowLeft,
   ArrowRight,
   BookOpen,
   Check,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
   Clock,
   Cloud,
   Compass,
   Download,
   Headphones,
   Infinity as InfinityIcon,
+  LayoutGrid,
   Loader2,
   Moon,
   PlayCircle,
   Repeat,
   RotateCcw,
   Search,
+  SlidersHorizontal,
   Sparkles,
   Square,
   Sun,
@@ -237,11 +242,43 @@ export function StoryReader({
   const [activeStoryId, setActiveStoryId] = useState('');
   const [story, setStory] = useState<StoryBook | null>(null);
 
+  const [mobilePictureSettingsOpen, setMobilePictureSettingsOpen] = useState(false);
+  const [shelfExpanded, setShelfExpanded] = useState(false);
+  const shelfScrollRef = useRef<HTMLDivElement | null>(null);
+  const playerStageRef = useRef<HTMLDivElement | null>(null);
+
+  const scrollShelfBy = (direction: 'left' | 'right') => {
+    const el = shelfScrollRef.current;
+    if (!el) return;
+    const step = Math.max(240, Math.round(el.clientWidth * 0.78));
+    el.scrollBy({
+      left: direction === 'left' ? -step : step,
+      behavior: 'smooth',
+    });
+  };
+
   // Sync reader style whenever switching between Truyện kể and Sách nói
   useEffect(() => {
     setReaderStyle(isAudiobookSection ? 'audiobook' : 'picture');
     setViewTab('library');
+    setMobilePictureSettingsOpen(false);
+    setShelfExpanded(false);
   }, [isAudiobookSection]);
+
+  // Close mobile picture settings sheet on Escape & lock background scroll
+  useEffect(() => {
+    if (!mobilePictureSettingsOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMobilePictureSettingsOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [mobilePictureSettingsOpen]);
   const [narrationLocale, setNarrationLocale] = useState(
     learner.preferences.narrationLocale
   );
@@ -928,12 +965,12 @@ export function StoryReader({
 
   return (
     <div
-      className={`space-y-6 rounded-3xl transition-colors duration-300 ${
-        bedtimeMode ? 'bg-[#1C1917] text-[#F5EFE6] p-4 sm:p-6' : ''
+      className={`space-y-5 sm:space-y-6 min-w-0 max-w-full rounded-3xl transition-colors duration-300 ${
+        bedtimeMode ? 'bg-[#1C1917] text-[#F5EFE6] p-3.5 sm:p-6' : ''
       }`}
     >
       {/* Section Header & Mode Switcher */}
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-5 border-b border-slate-200/80 dark:border-slate-800">
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-3.5 sm:gap-4 pb-4 sm:pb-5 border-b border-slate-200/80 dark:border-slate-800">
         <div className="space-y-1.5">
           <div
             className={`flex flex-wrap items-center gap-2 text-xs font-medium tabular-nums ${
@@ -1060,7 +1097,7 @@ export function StoryReader({
               onClick={() =>
                 onSwitchSection(isAudiobookSection ? 'stories' : 'audiobooks')
               }
-              className={`inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-xl border text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+              className={`hidden md:inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] rounded-xl border text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
                 bedtimeMode
                   ? 'border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800'
                   : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
@@ -1123,7 +1160,7 @@ export function StoryReader({
         />
       ) : (
         <>
-          {/* Visual Story Bookshelf */}
+          {/* Visual Story Bookshelf (1-row scrollable rail by default on Mobile & Desktop; expandable to full grid) */}
           {stories.length > 0 && (
             <section
               aria-label={
@@ -1135,12 +1172,12 @@ export function StoryReader({
                     ? 'Kệ truyện kể tranh'
                     : 'Picture story bookshelf'
               }
-              className="space-y-3"
+              className="space-y-3 min-w-0 max-w-full"
             >
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2.5 sm:gap-3">
+                <div className="flex items-center gap-2 min-w-0">
                   <h2
-                    className={`text-sm font-bold inline-flex items-center gap-2 ${
+                    className={`text-sm font-bold inline-flex items-center gap-2 truncate ${
                       bedtimeMode
                         ? 'text-[#F5EFE6]'
                         : 'text-slate-900 dark:text-slate-100'
@@ -1148,33 +1185,96 @@ export function StoryReader({
                   >
                     {isAudiobookSection ? (
                       <Headphones
-                        className={`w-4 h-4 ${
+                        className={`w-4 h-4 shrink-0 ${
                           bedtimeMode ? 'text-amber-300' : 'text-accent'
                         }`}
                         aria-hidden="true"
                       />
                     ) : (
                       <BookOpen
-                        className={`w-4 h-4 ${
+                        className={`w-4 h-4 shrink-0 ${
                           bedtimeMode ? 'text-amber-300' : 'text-accent'
                         }`}
                         aria-hidden="true"
                       />
                     )}
-                    <span>
+                    <span className="truncate">
                       {isAudiobookSection
                         ? isVi
-                          ? 'Danh sách Sách nói & Truyện dài'
-                          : 'Audiobooks & Long Stories Shelf'
+                          ? 'Chọn Sách nói & Truyện dài'
+                          : 'Choose Audiobook'
                         : isVi
-                          ? 'Danh sách Truyện kể tranh'
-                          : 'Picture Stories Shelf'}
+                          ? 'Chọn Truyện kể tranh'
+                          : 'Choose Picture Story'}
                     </span>
                   </h2>
+
+                  {/* Scroll Arrows + Expand All Grid Toggle */}
+                  {(filteredStories.length > 1 || stories.length > 1) && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      {!shelfExpanded && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => scrollShelfBy('left')}
+                            aria-label={isVi ? 'Cuộn kệ sang trái' : 'Scroll shelf left'}
+                            className={`inline-flex items-center justify-center w-8 h-8 rounded-lg border cursor-pointer transition-colors ${
+                              bedtimeMode
+                                ? 'border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800'
+                                : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:border-accent hover:text-accent'
+                            }`}
+                          >
+                            <ChevronLeft className="w-4 h-4" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => scrollShelfBy('right')}
+                            aria-label={isVi ? 'Cuộn kệ sang phải' : 'Scroll shelf right'}
+                            className={`inline-flex items-center justify-center w-8 h-8 rounded-lg border cursor-pointer transition-colors ${
+                              bedtimeMode
+                                ? 'border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800'
+                                : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:border-accent hover:text-accent'
+                            }`}
+                          >
+                            <ChevronRight className="w-4 h-4" aria-hidden="true" />
+                          </button>
+                        </>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => setShelfExpanded((v) => !v)}
+                        className={`inline-flex items-center gap-1 px-2.5 h-8 rounded-lg border text-xs font-semibold cursor-pointer transition-colors whitespace-nowrap ${
+                          shelfExpanded
+                            ? bedtimeMode
+                              ? 'border-amber-400/50 bg-stone-800 text-amber-200'
+                              : 'border-accent bg-accent-soft text-accent'
+                            : bedtimeMode
+                              ? 'border-stone-700 bg-stone-900 text-stone-300 hover:bg-stone-800'
+                              : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:border-accent'
+                        }`}
+                      >
+                        {shelfExpanded ? (
+                          <ChevronUp className="w-3.5 h-3.5" aria-hidden="true" />
+                        ) : (
+                          <LayoutGrid className="w-3.5 h-3.5" aria-hidden="true" />
+                        )}
+                        <span className="tabular-nums">
+                          {shelfExpanded
+                            ? isVi
+                              ? 'Thu gọn'
+                              : 'Collapse'
+                            : isVi
+                              ? `Tất cả (${filteredStories.length > 0 ? filteredStories.length : stories.length})`
+                              : `All (${filteredStories.length > 0 ? filteredStories.length : stories.length})`}
+                        </span>
+                      </button>
+                    </div>
+                  )}
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="relative">
+                <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                  <div className="relative flex-1 sm:flex-none min-w-[140px]">
                     <Search
                       className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
                       aria-hidden="true"
@@ -1184,7 +1284,7 @@ export function StoryReader({
                       value={librarySearch}
                       onChange={(e) => setLibrarySearch(e.target.value)}
                       placeholder={isVi ? 'Lọc nhanh trên kệ...' : 'Filter shelf...'}
-                      className={`min-h-[34px] w-40 sm:w-48 rounded-xl border pl-8 pr-2.5 text-xs ${
+                      className={`min-h-[40px] sm:min-h-[36px] w-full sm:w-44 rounded-xl border pl-8 pr-2.5 text-xs ${
                         bedtimeMode
                           ? 'border-stone-700 bg-stone-900 text-stone-200 placeholder:text-stone-500'
                           : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 placeholder:text-slate-400'
@@ -1197,7 +1297,7 @@ export function StoryReader({
                       value={ageFilter}
                       onChange={(e) => setAgeFilter(e.target.value)}
                       aria-label={isVi ? 'Lọc theo nhóm tuổi' : 'Filter by age group'}
-                      className={`min-h-[34px] rounded-xl border px-2.5 text-xs font-semibold ${
+                      className={`min-h-[40px] sm:min-h-[36px] rounded-xl border px-2.5 text-xs font-semibold ${
                         bedtimeMode
                           ? 'border-stone-700 bg-stone-900 text-stone-200'
                           : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200'
@@ -1217,19 +1317,28 @@ export function StoryReader({
                   <button
                     type="button"
                     onClick={() => setViewTab('discover')}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[34px] rounded-xl border text-xs font-semibold cursor-pointer ${
+                    className={`inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] sm:min-h-[36px] rounded-xl border text-xs font-semibold cursor-pointer whitespace-nowrap ${
                       bedtimeMode
                         ? 'border-amber-400/40 bg-stone-800 text-amber-200 hover:bg-stone-700'
                         : 'border-accent bg-accent-soft'
                     }`}
                   >
                     <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>{isVi ? 'Tải thêm sách nói & truyện' : 'Browse Sources'}</span>
+                    <span>{isVi ? 'Tải thêm' : 'Browse Sources'}</span>
                   </button>
                 </div>
               </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {/* Horizontal Scrollable Rail (Mobile & Desktop default) OR Full Expandable Grid */}
+          <div
+            ref={shelfScrollRef}
+            className={
+              shelfExpanded
+                ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5'
+                : 'flex flex-nowrap overflow-x-auto overscroll-x-contain snap-x snap-proximity gap-3 pb-2 w-full max-w-full min-w-0'
+            }
+            style={!shelfExpanded ? { WebkitOverflowScrolling: 'touch' } : undefined}
+          >
             {(filteredStories.length > 0 ? filteredStories : stories).map((item) => {
               const selected = item.id === activeStoryId;
               const itemTitle =
@@ -1252,8 +1361,21 @@ export function StoryReader({
                     stopSpeaking();
                     setIsPlaying(false);
                     setActiveStoryId(item.id);
+                    if (shelfExpanded) {
+                      setShelfExpanded(false);
+                      window.setTimeout(() => {
+                        playerStageRef.current?.scrollIntoView({
+                          behavior: 'smooth',
+                          block: 'start',
+                        });
+                      }, 80);
+                    }
                   }}
-                  className={`group text-left rounded-2xl border p-3 flex items-center gap-3.5 transition-colors cursor-pointer ${
+                  className={`group text-left rounded-2xl border p-3 flex items-center gap-3 transition-colors cursor-pointer ${
+                    shelfExpanded
+                      ? 'w-full'
+                      : 'w-[78vw] max-w-[285px] sm:w-[275px] shrink-0 snap-start'
+                  } ${
                     bedtimeMode
                       ? selected
                         ? 'border-amber-400/70 bg-stone-800/90'
@@ -1263,7 +1385,7 @@ export function StoryReader({
                         : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-accent'
                   }`}
                 >
-                  <div className="w-20 h-16 rounded-xl overflow-hidden border border-slate-200/40 dark:border-slate-700 bg-[#FAF8F2] dark:bg-slate-800 shrink-0">
+                  <div className="w-16 h-14 sm:w-20 sm:h-16 rounded-xl overflow-hidden border border-slate-200/40 dark:border-slate-700 bg-[#FAF8F2] dark:bg-slate-800 shrink-0">
                     <AssetImage
                       assetRef={item.coverAssetRef}
                       altOverride={itemTitle}
@@ -1310,7 +1432,7 @@ export function StoryReader({
                       </div>
                     </div>
                     <p
-                      className={`text-xs line-clamp-2 ${
+                      className={`text-xs line-clamp-1 sm:line-clamp-2 ${
                         bedtimeMode
                           ? 'text-stone-400'
                           : 'text-slate-500 dark:text-slate-400'
@@ -1363,6 +1485,7 @@ export function StoryReader({
         </section>
       )}
 
+      <div ref={playerStageRef} className="scroll-mt-20 min-w-0 max-w-full">
       {story && segment && readerStyle === 'audiobook' ? (
         <AudiobookPlayer
           story={story}
@@ -1397,10 +1520,10 @@ export function StoryReader({
           }}
         />
       ) : story && segment ? (
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        {/* Left/Primary Zone: Picture Book Stage */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pb-24 md:pb-20 lg:pb-0">
+        {/* Left/Primary Zone: Picture Book Stage (Header + Balanced Illustration + Text + Quick Jump) */}
         <section
-          className={`lg:col-span-8 rounded-2xl border overflow-hidden ${
+          className={`lg:col-span-8 min-w-0 rounded-2xl border overflow-hidden ${
             bedtimeMode
               ? 'border-stone-700 bg-[#26221F]'
               : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
@@ -1434,11 +1557,137 @@ export function StoryReader({
             />
           </div>
 
+          {/* Clean Single-Row Top Story Stage Header Bar */}
           <div
-            className={`aspect-[16/10] w-full overflow-hidden border-b ${
+            className={`px-4 sm:px-6 py-2.5 sm:py-3 border-b flex items-center justify-between gap-2 text-xs tabular-nums ${
+              bedtimeMode
+                ? 'bg-stone-900/70 border-stone-700 text-stone-300'
+                : 'bg-slate-50/80 dark:bg-slate-950/70 border-slate-100 dark:border-slate-800 text-slate-600 dark:text-slate-300'
+            }`}
+          >
+            <div className="min-w-0 flex-1 flex items-center gap-1.5">
+              <h2
+                className={`text-sm sm:text-base font-bold truncate ${
+                  bedtimeMode
+                    ? 'text-[#F5EFE6]'
+                    : 'text-slate-900 dark:text-slate-100'
+                }`}
+              >
+                {story.titles[narrationLocale] ?? story.titles.en}
+              </h2>
+              <span
+                className={`text-xs font-semibold shrink-0 ${
+                  bedtimeMode ? 'text-amber-300' : 'text-accent'
+                }`}
+              >
+                · {segmentIndex + 1}/{story.segments.length}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              {offlineSaving && offlineAudioProgress ? (
+                <span
+                  role="status"
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold tabular-nums ${
+                    bedtimeMode
+                      ? 'border-amber-400/40 bg-stone-800 text-amber-200'
+                      : 'border-sky-200 dark:border-sky-800/70 bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300'
+                  }`}
+                >
+                  <Loader2
+                    className="w-3.5 h-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                  <span>
+                    {offlineAudioProgress.done}/{offlineAudioProgress.total}
+                  </span>
+                </span>
+              ) : storyOfflineRecord.status === 'ready' ? (
+                <div className="inline-flex items-center gap-1.5">
+                  <span
+                    role="status"
+                    title={
+                      isVi
+                        ? 'Tất cả tranh minh họa và nội dung truyện đã sẵn sàng khi không có mạng'
+                        : 'All story pages and illustrations are cached for offline reading'
+                    }
+                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-semibold ${
+                      bedtimeMode
+                        ? 'border-emerald-700/70 bg-emerald-950/70 text-emerald-300'
+                        : 'border-emerald-200 dark:border-emerald-800/70 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
+                    }`}
+                  >
+                    <Cloud className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                    <Check className="w-3 h-3 -ml-1 shrink-0" aria-hidden="true" />
+                    <span className="hidden sm:inline">
+                      {audioSavedKey === activeStoryAudioKey
+                        ? isVi
+                          ? 'Đã lưu ngoại tuyến'
+                          : 'Saved Offline'
+                        : isVi
+                          ? 'Sẵn sàng ngoại tuyến'
+                          : 'Offline Ready'}
+                    </span>
+                    <span className="sm:hidden">Offline</span>
+                  </span>
+                  {audioSavedKey !== activeStoryAudioKey && (
+                    <button
+                      type="button"
+                      onClick={() => void handleSaveStoryOffline()}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                        bedtimeMode
+                          ? 'border-stone-600 bg-stone-800 text-amber-200 hover:bg-stone-700'
+                          : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:border-accent hover:text-accent'
+                      }`}
+                    >
+                      <Download className="w-3 h-3" aria-hidden="true" />
+                      <span className="hidden sm:inline">{isVi ? 'Lưu giọng' : 'Save audio'}</span>
+                      <span className="sm:hidden">{isVi ? 'Giọng' : 'Audio'}</span>
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void handleSaveStoryOffline()}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                    bedtimeMode
+                      ? 'border-amber-400/40 bg-stone-800 text-amber-200 hover:bg-stone-700'
+                      : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:border-accent hover:text-accent'
+                  }`}
+                >
+                  <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span className="hidden sm:inline">{isVi ? 'Lưu ngoại tuyến' : 'Save Offline'}</span>
+                  <span className="sm:hidden">{isVi ? 'Lưu' : 'Save'}</span>
+                </button>
+              )}
+
+              {sleepRemainingSec > 0 && (
+                <span className="hidden sm:inline-flex items-center gap-1 text-amber-400 font-semibold">
+                  <Clock className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{formatTimer(sleepRemainingSec)}</span>
+                </span>
+              )}
+              {savedNotice && (
+                <span
+                  className={`hidden sm:inline font-medium ${
+                    bedtimeMode
+                      ? 'text-emerald-300'
+                      : 'text-emerald-700 dark:text-emerald-400'
+                  }`}
+                >
+                  {messages.story.positionSaved}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Balanced Illustration Frame so Image + Text + Play Controls stay visible together on Desktop & Mobile */}
+          <div
+            className={`h-[220px] sm:h-[300px] lg:h-[340px] w-full overflow-hidden border-b ${
               bedtimeMode
                 ? 'bg-[#2C2722] border-stone-700'
-                : 'bg-slate-50 dark:bg-slate-950 border-slate-100 dark:border-slate-800'
+                : 'bg-[#FAF8F2] dark:bg-slate-950 border-slate-100 dark:border-slate-800'
             }`}
           >
             <AssetImage
@@ -1452,125 +1701,10 @@ export function StoryReader({
             />
           </div>
 
-          <div className="p-6 sm:p-8 space-y-6">
-            <div
-              className={`flex flex-wrap items-center justify-between gap-2 text-xs tabular-nums ${
-                bedtimeMode
-                  ? 'text-stone-400'
-                  : 'text-slate-500 dark:text-slate-400'
-              }`}
-            >
-              <span>
-                {story.titles[narrationLocale] ?? story.titles.en} ·{' '}
-                {messages.story.pageOf} {segmentIndex + 1}/{story.segments.length}
-              </span>
-              <div className="flex flex-wrap items-center gap-2.5">
-                {offlineSaving && offlineAudioProgress ? (
-                  <span
-                    role="status"
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold tabular-nums ${
-                      bedtimeMode
-                        ? 'border-amber-400/40 bg-stone-800 text-amber-200'
-                        : 'border-sky-200 dark:border-sky-800/70 bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300'
-                    }`}
-                  >
-                    <Loader2
-                      className="w-3.5 h-3.5 animate-spin"
-                      aria-hidden="true"
-                    />
-                    <span>
-                      {isVi
-                        ? `Đang lưu ngoại tuyến (${offlineAudioProgress.done}/${offlineAudioProgress.total} trang)...`
-                        : `Saving offline (${offlineAudioProgress.done}/${offlineAudioProgress.total} pages)...`}
-                    </span>
-                  </span>
-                ) : storyOfflineRecord.status === 'ready' ? (
-                  <div className="inline-flex items-center gap-1.5">
-                    <span
-                      role="status"
-                      title={
-                        isVi
-                          ? 'Tất cả tranh minh họa và nội dung truyện đã sẵn sàng khi không có mạng'
-                          : 'All story pages and illustrations are cached for offline reading'
-                      }
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold ${
-                        bedtimeMode
-                          ? 'border-emerald-700/70 bg-emerald-950/70 text-emerald-300'
-                          : 'border-emerald-200 dark:border-emerald-800/70 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
-                      }`}
-                    >
-                      <Cloud className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                      <Check className="w-3 h-3 -ml-1 shrink-0" aria-hidden="true" />
-                      <span>
-                        {audioSavedKey === activeStoryAudioKey
-                          ? isVi
-                            ? 'Sẵn sàng ngoại tuyến (ảnh + giọng)'
-                            : 'Ready for Offline (Full Audio)'
-                          : isVi
-                            ? 'Sẵn sàng ngoại tuyến'
-                            : 'Ready for Offline'}
-                      </span>
-                    </span>
-                    {audioSavedKey !== activeStoryAudioKey && (
-                      <button
-                        type="button"
-                        onClick={() => void handleSaveStoryOffline()}
-                        title={
-                          isVi
-                            ? 'Tải sẵn toàn bộ giọng đọc các trang để nghe khi mất mạng'
-                            : 'Pre-download narration audio for all pages offline'
-                        }
-                        className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer ${
-                          bedtimeMode
-                            ? 'border-stone-600 bg-stone-800 text-amber-200 hover:bg-stone-700'
-                            : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:border-accent hover:text-accent'
-                        }`}
-                      >
-                        <Download className="w-3 h-3" aria-hidden="true" />
-                        <span>{isVi ? 'Lưu giọng đọc' : 'Save audio'}</span>
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => void handleSaveStoryOffline()}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer ${
-                      bedtimeMode
-                        ? 'border-amber-400/40 bg-stone-800 text-amber-200 hover:bg-stone-700'
-                        : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:border-accent hover:text-accent'
-                    }`}
-                  >
-                    <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>
-                      {isVi ? 'Lưu truyện ngoại tuyến' : 'Save for Offline'}
-                    </span>
-                  </button>
-                )}
-
-                {sleepRemainingSec > 0 && (
-                  <span className="inline-flex items-center gap-1 text-amber-300 font-semibold">
-                    <Clock className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>{formatTimer(sleepRemainingSec)}</span>
-                  </span>
-                )}
-                {savedNotice && (
-                  <span
-                    className={`font-medium ${
-                      bedtimeMode
-                        ? 'text-emerald-300'
-                        : 'text-emerald-700 dark:text-emerald-400'
-                    }`}
-                  >
-                    {messages.story.positionSaved}
-                  </span>
-                )}
-              </div>
-            </div>
-
+          <div className="p-4 sm:p-6 space-y-4 sm:space-y-5">
             {showCaptions && (
               <div
-                className={`rounded-xl p-5 border transition-colors space-y-3 ${
+                className={`rounded-xl p-4 sm:p-5 border transition-colors space-y-2.5 ${
                   bedtimeMode
                     ? isPlaying
                       ? 'border-amber-500/60 bg-stone-900/90'
@@ -1581,7 +1715,7 @@ export function StoryReader({
                 }`}
               >
                 <p
-                  className={`text-2xl sm:text-3xl font-semibold leading-relaxed flex flex-wrap gap-x-2 gap-y-1 ${
+                  className={`text-xl sm:text-2xl font-semibold leading-relaxed flex flex-wrap gap-x-1.5 gap-y-1 ${
                     bedtimeMode
                       ? 'text-[#F5EFE6]'
                       : 'text-slate-900 dark:text-slate-100'
@@ -1804,65 +1938,45 @@ export function StoryReader({
               </div>
             )}
 
-            <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
-              <button
-                type="button"
-                disabled={segmentIndex === 0}
-                onClick={() => goToSegment(segmentIndex - 1)}
-                className={`inline-flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-xl border text-sm font-semibold disabled:opacity-40 cursor-pointer disabled:cursor-default ${
-                  bedtimeMode
-                    ? 'border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800'
-                    : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
-                }`}
+            {/* Quick Page Jump Strip for Picture Books (Mobile Play/Prev/Next/Settings are pinned cleanly at the bottom) */}
+            {story.segments.length > 1 && (
+              <div
+                aria-label={isVi ? 'Chọn nhanh trang truyện' : 'Jump to story page'}
+                className="flex items-center gap-1.5 overflow-x-auto overscroll-x-contain pb-1 pt-1 border-t border-slate-100 dark:border-slate-800"
               >
-                <ArrowLeft className="w-4 h-4" aria-hidden="true" />
-                <span className="whitespace-nowrap">
-                  {messages.story.previousPage}
+                <span
+                  className={`text-[11px] font-semibold mr-1 shrink-0 ${
+                    bedtimeMode
+                      ? 'text-stone-400'
+                      : 'text-slate-500 dark:text-slate-400'
+                  }`}
+                >
+                  {isVi ? 'Trang:' : 'Page:'}
                 </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={!segmentText.trim()}
-                onClick={handlePlayToggle}
-                className={`inline-flex items-center gap-2 px-6 py-3 min-h-[48px] rounded-xl text-white font-semibold disabled:opacity-40 transition-colors cursor-pointer ${
-                  bedtimeMode ? 'bg-amber-600 hover:bg-amber-700' : 'btn-accent'
-                }`}
-              >
-                {isLoadingAudio ? (
-                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-                ) : isPlaying ? (
-                  <Square className="w-4 h-4 fill-current" aria-hidden="true" />
-                ) : (
-                  <Volume2 className="w-5 h-5" aria-hidden="true" />
-                )}
-                <span className="whitespace-nowrap">
-                  {isLoadingAudio
-                    ? isVi
-                      ? 'Đang chuẩn bị giọng đọc...'
-                      : 'Preparing voice...'
-                    : isPlaying
-                      ? messages.story.stopAudio
-                      : messages.story.playSegment}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={isLastPage}
-                onClick={() => goToSegment(segmentIndex + 1)}
-                className={`inline-flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-xl text-sm font-semibold disabled:opacity-40 cursor-pointer disabled:cursor-default ${
-                  bedtimeMode
-                    ? 'bg-stone-100 text-stone-900 hover:bg-white'
-                    : 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-white'
-                }`}
-              >
-                <span className="whitespace-nowrap">
-                  {messages.story.nextPage}
-                </span>
-                <ArrowRight className="w-4 h-4" aria-hidden="true" />
-              </button>
-            </div>
+                {story.segments.map((segItem, idx) => {
+                  const active = idx === segmentIndex;
+                  return (
+                    <button
+                      key={segItem.id}
+                      type="button"
+                      onClick={() => goToSegment(idx)}
+                      aria-current={active ? 'page' : undefined}
+                      className={`min-w-[34px] h-[34px] px-2 rounded-lg text-xs font-bold tabular-nums shrink-0 cursor-pointer transition-colors ${
+                        active
+                          ? bedtimeMode
+                            ? 'bg-amber-600 text-white'
+                            : 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900'
+                          : bedtimeMode
+                            ? 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                      }`}
+                    >
+                      {idx + 1}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             {isLastPage && (
               <div
@@ -1923,25 +2037,43 @@ export function StoryReader({
           </div>
         </section>
 
-        {/* Right Zone: Narration & Bedtime Controls */}
+        {/* Desktop Sticky Right Control Deck: Play + Prev/Next Page + Voice & Bedtime Controls (Zero Scroll!) */}
         <aside
-          className={`lg:col-span-4 rounded-2xl border p-6 space-y-5 ${
+          className={`hidden lg:flex lg:flex-col lg:col-span-4 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] rounded-2xl border overflow-hidden ${
             bedtimeMode
               ? 'border-stone-700 bg-[#26221F] text-[#F5EFE6]'
               : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
           }`}
         >
-          <div className="space-y-1">
-            <div className="flex items-start justify-between gap-2">
-              <h2
-                className={`text-lg font-bold ${
-                  bedtimeMode
-                    ? 'text-[#F5EFE6]'
-                    : 'text-slate-900 dark:text-slate-100'
-                }`}
-              >
-                {messages.story.heading}
-              </h2>
+          {/* Pinned Playback Deck at Top of Right Panel */}
+          <div
+            className={`p-4 sm:p-5 border-b space-y-3 shrink-0 ${
+              bedtimeMode
+                ? 'bg-[#1F1B18] border-stone-700'
+                : 'bg-slate-50/80 dark:bg-slate-950/70 border-slate-100 dark:border-slate-800'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p
+                  className={`text-[11px] font-bold uppercase tracking-wide tabular-nums ${
+                    bedtimeMode
+                      ? 'text-stone-400'
+                      : 'text-slate-500 dark:text-slate-400'
+                  }`}
+                >
+                  {messages.story.pageOf} {segmentIndex + 1} / {story.segments.length}
+                </p>
+                <h2
+                  className={`text-sm font-bold truncate ${
+                    bedtimeMode
+                      ? 'text-[#F5EFE6]'
+                      : 'text-slate-900 dark:text-slate-100'
+                  }`}
+                >
+                  {story.titles[narrationLocale] ?? story.titles.en}
+                </h2>
+              </div>
               <button
                 type="button"
                 onClick={() => {
@@ -1951,36 +2083,99 @@ export function StoryReader({
                   setIsPlaying(false);
                   setReaderStyle('audiobook');
                 }}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-[11px] font-bold shrink-0 cursor-pointer transition-colors ${
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-[11px] font-bold shrink-0 cursor-pointer transition-colors whitespace-nowrap ${
                   bedtimeMode
                     ? 'border-amber-400/50 bg-stone-800 text-amber-200 hover:bg-stone-700'
                     : 'border-accent bg-accent-soft hover:opacity-90'
                 }`}
               >
                 <Headphones className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>{isVi ? 'Chế độ Sách nói' : 'Audiobook Mode'}</span>
+                <span>{isVi ? 'Sách nói' : 'Audiobook'}</span>
               </button>
             </div>
+
+            <button
+              type="button"
+              disabled={!segmentText.trim()}
+              onClick={handlePlayToggle}
+              className={`w-full inline-flex items-center justify-center gap-2 px-5 h-12 rounded-2xl text-white text-sm font-bold shadow-sm disabled:opacity-40 transition-colors cursor-pointer ${
+                bedtimeMode ? 'bg-amber-600 hover:bg-amber-700' : 'btn-accent'
+              }`}
+            >
+              {isLoadingAudio ? (
+                <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+              ) : isPlaying ? (
+                <Square className="w-4 h-4 fill-current" aria-hidden="true" />
+              ) : (
+                <Volume2 className="w-5 h-5" aria-hidden="true" />
+              )}
+              <span className="whitespace-nowrap">
+                {isLoadingAudio
+                  ? isVi
+                    ? 'Đang chuẩn bị giọng...'
+                    : 'Preparing voice...'
+                  : isPlaying
+                    ? messages.story.stopAudio
+                    : messages.story.playSegment}
+              </span>
+            </button>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={segmentIndex === 0}
+                onClick={() => goToSegment(segmentIndex - 1)}
+                className={`inline-flex items-center justify-center gap-1.5 px-3 h-10 rounded-xl border text-xs font-bold disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors ${
+                  bedtimeMode
+                    ? 'border-stone-700 bg-stone-900 text-stone-200 hover:bg-stone-800'
+                    : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700'
+                }`}
+              >
+                <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                <span className="whitespace-nowrap">
+                  {messages.story.previousPage}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isLastPage}
+                onClick={() => goToSegment(segmentIndex + 1)}
+                className={`inline-flex items-center justify-center gap-1.5 px-3 h-10 rounded-xl text-xs font-bold disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors ${
+                  bedtimeMode
+                    ? 'bg-stone-100 text-stone-900 hover:bg-white'
+                    : 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-white'
+                }`}
+              >
+                <span className="whitespace-nowrap">
+                  {messages.story.nextPage}
+                </span>
+                <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+
+          {/* Scrollable Voice, Speed, Bedtime & Display Settings inside Sticky Right Panel */}
+          <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1">
             <p
-              className={`text-sm ${
+              className={`text-xs leading-relaxed ${
                 bedtimeMode
                   ? 'text-stone-300'
-                  : 'text-slate-600 dark:text-slate-400'
+                  : 'text-slate-500 dark:text-slate-400'
               }`}
             >
               {story.summaries[explanationLocale] ??
                 story.summaries.vi ??
                 Object.values(story.summaries)[0]}
             </p>
-          </div>
 
-          <div
-            className={`space-y-4 pt-2 border-t ${
-              bedtimeMode
-                ? 'border-stone-700'
-                : 'border-slate-100 dark:border-slate-800'
-            }`}
-          >
+            <div
+              className={`space-y-4 pt-3 border-t ${
+                bedtimeMode
+                  ? 'border-stone-700'
+                  : 'border-slate-100 dark:border-slate-800'
+              }`}
+            >
             <label className="block space-y-1.5">
               <span
                 className={`text-xs font-semibold ${
@@ -2195,10 +2390,395 @@ export function StoryReader({
                 />
               </label>
             </div>
+            </div>
           </div>
         </aside>
+
+        {/* Always-Pinned Mobile Bottom Player & Settings Dock for Picture Book Mode */}
+        {!mobilePictureSettingsOpen && (
+          <div
+            role="region"
+            aria-label={isVi ? 'Thanh điều khiển truyện kể' : 'Story player bar'}
+            className={`lg:hidden fixed inset-x-0 bottom-[calc(3.75rem+env(safe-area-inset-bottom))] md:bottom-0 z-20 border-t shadow-[0_-6px_24px_rgba(15,23,42,0.08)] backdrop-blur-md md:pb-[env(safe-area-inset-bottom)] ${
+              bedtimeMode
+                ? 'border-stone-700/90 bg-[#26221F]/96 text-[#F5EFE6]'
+                : 'border-slate-200/90 dark:border-slate-800/90 bg-white/96 dark:bg-slate-900/96 text-slate-900 dark:text-slate-100'
+            }`}
+          >
+            {/* Top Page Progress Hairline */}
+            <div
+              className={`h-0.5 w-full ${
+                bedtimeMode ? 'bg-stone-800' : 'bg-slate-200/80 dark:bg-slate-800'
+              }`}
+            >
+              <div
+                className={`h-full transition-all duration-300 ${
+                  bedtimeMode ? 'bg-amber-400' : 'bg-sky-500'
+                }`}
+                style={{
+                  width: `${Math.round(
+                    ((segmentIndex + 1) / Math.max(1, story.segments.length)) *
+                      100
+                  )}%`,
+                }}
+              />
+            </div>
+
+            <div className="max-w-3xl mx-auto px-2.5 sm:px-4 py-2 flex items-center gap-2">
+              <button
+                type="button"
+                disabled={!segmentText.trim()}
+                onClick={handlePlayToggle}
+                aria-label={
+                  isPlaying
+                    ? messages.story.stopAudio
+                    : messages.story.playSegment
+                }
+                className={`inline-flex items-center justify-center w-11 h-11 rounded-xl text-white disabled:opacity-40 shrink-0 cursor-pointer transition-colors shadow-xs ${
+                  bedtimeMode ? 'bg-amber-600 hover:bg-amber-700' : 'btn-accent'
+                }`}
+              >
+                {isLoadingAudio ? (
+                  <Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" />
+                ) : isPlaying ? (
+                  <Square className="w-4 h-4 fill-current" aria-hidden="true" />
+                ) : (
+                  <Volume2 className="w-5 h-5" aria-hidden="true" />
+                )}
+              </button>
+
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-bold truncate">
+                  {story.titles[narrationLocale] ?? story.titles.en}
+                </p>
+                <p
+                  className={`text-[11px] tabular-nums truncate ${
+                    bedtimeMode
+                      ? 'text-stone-400'
+                      : 'text-slate-500 dark:text-slate-400'
+                  }`}
+                >
+                  {messages.story.pageOf} {segmentIndex + 1}/{story.segments.length} ·{' '}
+                  {effectiveSpeed.toFixed(2)}x
+                  {sleepRemainingSec > 0 ? ` · ${formatTimer(sleepRemainingSec)}` : ''}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  disabled={segmentIndex === 0}
+                  onClick={() => goToSegment(segmentIndex - 1)}
+                  aria-label={messages.story.previousPage}
+                  className={`inline-flex items-center justify-center w-10 h-10 rounded-xl border disabled:opacity-35 cursor-pointer disabled:cursor-default transition-colors ${
+                    bedtimeMode
+                      ? 'border-stone-700 bg-stone-800/80 text-stone-200'
+                      : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200'
+                  }`}
+                >
+                  <ArrowLeft className="w-4 h-4" aria-hidden="true" />
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isLastPage}
+                  onClick={() => goToSegment(segmentIndex + 1)}
+                  aria-label={messages.story.nextPage}
+                  className={`inline-flex items-center justify-center w-10 h-10 rounded-xl disabled:opacity-35 cursor-pointer disabled:cursor-default transition-colors ${
+                    bedtimeMode
+                      ? 'bg-stone-100 text-stone-900'
+                      : 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900'
+                  }`}
+                >
+                  <ArrowRight className="w-4 h-4" aria-hidden="true" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setMobilePictureSettingsOpen(true)}
+                  aria-label={isVi ? 'Cài đặt giọng đọc và truyện' : 'Voice and story settings'}
+                  className={`inline-flex items-center justify-center w-10 h-10 rounded-xl border cursor-pointer transition-colors ${
+                    bedtimeMode
+                      ? 'border-amber-400/40 bg-stone-800 text-amber-200'
+                      : 'border-accent bg-accent-soft text-accent'
+                  }`}
+                >
+                  <SlidersHorizontal className="w-4 h-4" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Mobile Bottom Sheet for Picture Book Voice & Reading Controls */}
+        <AnimatePresence>
+          {mobilePictureSettingsOpen && (
+            <div
+              className="lg:hidden fixed inset-0 z-50 flex items-end justify-center"
+              role="dialog"
+              aria-modal="true"
+              aria-label={isVi ? 'Cài đặt giọng đọc truyện' : 'Story narration settings'}
+            >
+              <motion.button
+                type="button"
+                aria-label={isVi ? 'Đóng cài đặt' : 'Close settings'}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.18 }}
+                onClick={() => setMobilePictureSettingsOpen(false)}
+                className="fixed inset-0 bg-slate-950/55 backdrop-blur-[2px]"
+              />
+              <motion.div
+                initial={{ y: '100%' }}
+                animate={{ y: 0 }}
+                exit={{ y: '100%' }}
+                transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+                className={`relative w-full max-w-lg max-h-[84dvh] rounded-t-3xl border-t border-x shadow-2xl flex flex-col overflow-hidden ${
+                  bedtimeMode
+                    ? 'border-stone-700 bg-[#26221F] text-[#F5EFE6]'
+                    : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100'
+                }`}
+              >
+                <div className="pt-2.5 pb-1 flex justify-center shrink-0">
+                  <div
+                    className={`w-10 h-1 rounded-full ${
+                      bedtimeMode ? 'bg-stone-600' : 'bg-slate-300 dark:bg-slate-700'
+                    }`}
+                  />
+                </div>
+                <div
+                  className={`px-5 py-3 border-b flex items-center justify-between gap-3 shrink-0 ${
+                    bedtimeMode
+                      ? 'border-stone-700'
+                      : 'border-slate-100 dark:border-slate-800'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <SlidersHorizontal
+                      className={`w-4 h-4 shrink-0 ${bedtimeMode ? 'text-amber-300' : 'text-accent'}`}
+                      aria-hidden="true"
+                    />
+                    <h3 className="text-base font-bold truncate">
+                      {isVi ? 'Giọng đọc & Cài đặt truyện' : 'Voice & Story Settings'}
+                    </h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setMobilePictureSettingsOpen(false)}
+                    aria-label={isVi ? 'Đóng' : 'Close'}
+                    className={`inline-flex items-center justify-center w-9 h-9 rounded-xl border cursor-pointer shrink-0 ${
+                      bedtimeMode
+                        ? 'border-stone-700 bg-stone-800 text-stone-200'
+                        : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    <X className="w-4 h-4" aria-hidden="true" />
+                  </button>
+                </div>
+
+                <div className="px-5 py-4 space-y-4 overflow-y-auto pb-[calc(1.25rem+env(safe-area-inset-bottom))]">
+                  <div className="flex items-center justify-between gap-2">
+                    <p
+                      className={`text-xs line-clamp-2 ${
+                        bedtimeMode
+                          ? 'text-stone-300'
+                          : 'text-slate-500 dark:text-slate-400'
+                      }`}
+                    >
+                      {story.summaries[explanationLocale] ??
+                        story.summaries.vi ??
+                        Object.values(story.summaries)[0]}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        clearAutoTimer();
+                        clearHighlightTimer();
+                        stopSpeaking();
+                        setIsPlaying(false);
+                        setMobilePictureSettingsOpen(false);
+                        setReaderStyle('audiobook');
+                      }}
+                      className={`inline-flex items-center gap-1.5 px-3 min-h-[38px] rounded-xl border text-xs font-bold shrink-0 cursor-pointer transition-colors whitespace-nowrap ${
+                        bedtimeMode
+                          ? 'border-amber-400/50 bg-stone-800 text-amber-200'
+                          : 'border-accent bg-accent-soft'
+                      }`}
+                    >
+                      <Headphones className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>{isVi ? 'Chế độ Sách nói' : 'Audiobook'}</span>
+                    </button>
+                  </div>
+
+                  <label className="block space-y-1.5">
+                    <span
+                      className={`text-xs font-semibold ${
+                        bedtimeMode
+                          ? 'text-stone-300'
+                          : 'text-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      {messages.story.narrationLanguage}
+                    </span>
+                    <select
+                      value={effectiveNarrationLocale}
+                      onChange={(e) => {
+                        const nextLocale = e.target.value;
+                        clearAutoTimer();
+                        clearHighlightTimer();
+                        stopSpeaking();
+                        setIsLoadingAudio(false);
+                        setIsPlaying(false);
+                        setNarrationLocale(nextLocale);
+                        void persistPosition(segmentIndex, nextLocale);
+                      }}
+                      className={`w-full min-h-[44px] rounded-xl border px-3 text-sm ${
+                        bedtimeMode
+                          ? 'border-stone-700 bg-stone-900 text-[#F5EFE6]'
+                          : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100'
+                      }`}
+                    >
+                      {story.availableLocales.map((loc) => (
+                        <option key={loc} value={loc}>
+                          {getLocaleLabel(loc)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <VoiceAccentControls
+                    locale={effectiveNarrationLocale}
+                    interfaceLocale={learner.preferences.interfaceLocale}
+                    voices={voices}
+                    selectedVoiceId={selectedVoiceId}
+                    selectedAccent={selectedAccent}
+                    onVoiceChange={handleVoiceChange}
+                    onAccentChange={handleAccentChange}
+                    rate={effectiveSpeed}
+                    bedtimeMode={bedtimeMode}
+                    voiceLabel={messages.story.voiceSelect}
+                    emptyNotice={messages.story.noVoiceAvailable}
+                  />
+
+                  <div className="space-y-1.5">
+                    <div
+                      className={`flex items-center justify-between text-xs font-semibold tabular-nums ${
+                        bedtimeMode
+                          ? 'text-stone-300'
+                          : 'text-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      <span>{messages.story.speedLabel}</span>
+                      <span>{effectiveSpeed.toFixed(2)}x</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0.75}
+                      max={1.15}
+                      step={0.05}
+                      value={speed}
+                      onChange={(e) => setSpeed(Number(e.target.value))}
+                      className="w-full accent-sky-600 h-2"
+                    />
+                  </div>
+
+                  {bedtimeMode && (
+                    <div className="rounded-xl border border-stone-700 bg-stone-900/70 p-3.5 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-amber-200 inline-flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span>
+                            {isVi
+                              ? 'Hẹn giờ tự động tắt kể chuyện'
+                              : 'Bedtime sleep timer'}
+                          </span>
+                        </span>
+                        {sleepRemainingSec > 0 && (
+                          <span className="text-xs font-extrabold text-amber-300 tabular-nums">
+                            {formatTimer(sleepRemainingSec)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {([0, 5, 10, 15] as const).map((mins) => (
+                          <button
+                            key={mins}
+                            type="button"
+                            onClick={() => {
+                              setSleepTimerMinutes(mins);
+                              if (mins > 0) {
+                                setAutoAdvance(true);
+                                setSleepFinishedNotice(false);
+                              }
+                            }}
+                            className={`min-h-[40px] py-1.5 px-1 rounded-xl text-xs font-semibold tabular-nums cursor-pointer ${
+                              sleepTimerMinutes === mins
+                                ? 'bg-amber-600 text-white'
+                                : 'bg-stone-800 text-stone-300'
+                            }`}
+                          >
+                            {mins === 0
+                              ? isVi
+                                ? 'Tắt'
+                                : 'Off'
+                              : `${mins}${isVi ? 'p' : 'm'}`}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div
+                    className={`space-y-1 pt-2 border-t ${
+                      bedtimeMode
+                        ? 'border-stone-700'
+                        : 'border-slate-100 dark:border-slate-800'
+                    }`}
+                  >
+                    <label className="flex items-center justify-between min-h-[44px] text-sm cursor-pointer">
+                      <span>
+                        {isVi
+                          ? 'Tự động lật trang khi đọc xong'
+                          : 'Auto-advance pages while reading'}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={autoAdvance}
+                        onChange={(e) => {
+                          setAutoAdvance(e.target.checked);
+                          if (!e.target.checked) clearAutoTimer();
+                        }}
+                        className="w-4 h-4 accent-sky-600"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between min-h-[44px] text-sm cursor-pointer">
+                      <span>{messages.story.captionsToggle}</span>
+                      <input
+                        type="checkbox"
+                        checked={showCaptions}
+                        onChange={(e) => setShowCaptions(e.target.checked)}
+                        className="w-4 h-4 accent-sky-600"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between min-h-[44px] text-sm cursor-pointer">
+                      <span>{messages.story.translationToggle}</span>
+                      <input
+                        type="checkbox"
+                        checked={showTranslation}
+                        onChange={(e) => setShowTranslation(e.target.checked)}
+                        className="w-4 h-4 accent-sky-600"
+                      />
+                    </label>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </div>
       ) : null}
+      </div>
         </>
       )}
     </div>
