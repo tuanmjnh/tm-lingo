@@ -3,6 +3,7 @@
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  sendEmailVerification,
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
@@ -53,7 +54,26 @@ export async function signUpParentWithEmail(
   if (displayName?.trim()) {
     await updateProfile(result.user, { displayName: displayName.trim() });
   }
+  try {
+    await sendEmailVerification(result.user);
+  } catch {
+    // Non-fatal if verification email rate-limited
+  }
   return result.user;
+}
+
+export async function resendParentVerificationEmail(): Promise<void> {
+  const user = auth.currentUser;
+  if (!user) return;
+  await sendEmailVerification(user);
+}
+
+export async function reloadParentAuthUser(): Promise<User | null> {
+  const user = auth.currentUser;
+  if (!user) return null;
+  await user.reload();
+  await user.getIdToken(true);
+  return auth.currentUser;
 }
 
 export async function signOutParent(): Promise<void> {

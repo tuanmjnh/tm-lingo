@@ -1,6 +1,5 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import firebaseAppletConfig from '../../firebase-applet-config.json';
 import type { AuthUserProfile } from '../../packages/contracts/types';
 import { getMongoCollection } from '../db/mongo';
 
@@ -10,32 +9,21 @@ const FIREBASE_JWKS_URL = new URL(
 
 const firebaseJwks = createRemoteJWKSet(FIREBASE_JWKS_URL);
 
-let cachedProjectId: string | null = null;
-
 export function getFirebaseProjectId(): string | null {
-  if (cachedProjectId !== null) return cachedProjectId || null;
-
-  try {
-    const configPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
-    if (fs.existsSync(configPath)) {
-      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
-        projectId?: string;
-      };
-      if (parsed.projectId?.trim()) {
-        cachedProjectId = parsed.projectId.trim();
-        return cachedProjectId;
-      }
-    }
-  } catch {
-    // ignore malformed file
-  }
-
   const fromEnv =
+    process.env.FIREBASE_PROJECT_ID ||
     process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
     process.env.VITE_FIREBASE_PROJECT_ID ||
     '';
-  cachedProjectId = fromEnv.trim();
-  return cachedProjectId || null;
+  if (fromEnv.trim()) {
+    return fromEnv.trim();
+  }
+
+  const fromConfig =
+    typeof firebaseAppletConfig?.projectId === 'string'
+      ? firebaseAppletConfig.projectId.trim()
+      : '';
+  return fromConfig || null;
 }
 
 interface ParentAccountDoc {

@@ -40,6 +40,10 @@ import type {
 import type { UiMessages } from '../../i18n/messages';
 import { apiClient } from '../../shared/apiClient';
 import {
+  getFirestoreStoryPosition,
+  saveFirestoreStoryPosition,
+} from '../../shared/firestoreService';
+import {
   prefetchSpeech,
   speakText,
   stopSpeaking,
@@ -89,6 +93,7 @@ interface StoryReaderProps {
   storyLimitMinutes?: number;
   onSwitchSection?: (tab: 'stories' | 'audiobooks') => void;
   onOpenPackage?: (packageId?: string) => void;
+  accountUid?: string | null;
 }
 
 interface WordPopEntry {
@@ -229,6 +234,7 @@ export function StoryReader({
   storyLimitMinutes = 15,
   onSwitchSection,
   onOpenPackage,
+  accountUid = null,
 }: StoryReaderProps) {
   const isVi = learner.preferences.interfaceLocale === 'vi';
   const isAudiobookSection = sectionMode === 'audiobooks';
@@ -430,7 +436,31 @@ export function StoryReader({
               : res.story.availableLocales[0]
           );
         }
-        if (res.readingPosition) {
+        if (accountUid) {
+          void getFirestoreStoryPosition(accountUid, learner.id, activeStoryId)
+            .then((fsPos) => {
+              if (cancelled) return;
+              const resolvedPos = fsPos ?? res.readingPosition;
+              if (resolvedPos) {
+                setSegmentIndex(
+                  Math.min(
+                    resolvedPos.segmentIndex,
+                    res.story.segments.length - 1
+                  )
+                );
+              }
+            })
+            .catch(() => {
+              if (!cancelled && res.readingPosition) {
+                setSegmentIndex(
+                  Math.min(
+                    res.readingPosition.segmentIndex,
+                    res.story.segments.length - 1
+                  )
+                );
+              }
+            });
+        } else if (res.readingPosition) {
           setSegmentIndex(
             Math.min(
               res.readingPosition.segmentIndex,
@@ -768,7 +798,14 @@ export function StoryReader({
       segmentIndex: nextIndex,
     };
     try {
-      await apiClient.saveStoryPosition(story.id, payload);
+      if (accountUid) {
+        await saveFirestoreStoryPosition(accountUid, {
+          storyId: story.id,
+          ...payload,
+        });
+      } else {
+        await apiClient.saveStoryPosition(story.id, payload);
+      }
       setSavedNotice(true);
       setTimeout(() => setSavedNotice(false), 2000);
     } catch {

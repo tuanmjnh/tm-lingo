@@ -407,14 +407,52 @@ export interface NotificationDeliveryLog {
 
 export type UserRole = 'parent' | 'teacher' | 'admin';
 
+export type AccountType = 'parent' | 'student';
+
 export interface AuthUserProfile {
   id: string;
   email: string | null;
   displayName: string | null;
   role: UserRole;
+  accountType?: AccountType;
+  emailVerified?: boolean;
   provider: 'firebase' | 'tm-hub' | 'local-staff';
   roles?: string[];
   capabilities?: string[];
+}
+
+export interface FamilyInviteRecord {
+  inviteCode: string;
+  studentUid: string;
+  studentName: string;
+  ageYears: number;
+  ageBand: string;
+  gradeLevel: number;
+  status: 'active' | 'claimed' | 'revoked';
+  claimedByParentUid: string;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ObserverLinkRecord {
+  linkId: string;
+  parentUid: string;
+  studentUid: string;
+  parentDisplayName: string;
+  studentName: string;
+  ageYears: number;
+  ageBand: string;
+  gradeLevel: number;
+  avatarTone: LearnerProfile['avatarTone'];
+  inviteCode: string;
+  completedLessonsCount: number;
+  totalActivitiesCompleted: number;
+  currentStreakDays: number;
+  dailyMinutesGoal: number;
+  status: 'active' | 'revoked';
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ManagedUserRecord {

@@ -1,8 +1,16 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowLeft, ArrowRight, Check, Loader2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  GraduationCap,
+  Loader2,
+  Users,
+} from 'lucide-react';
 import type {
+  AccountType,
   AgeGroupConfig,
   LearnerProfile,
   LocaleConfig,
@@ -15,6 +23,7 @@ interface LearnerOnboardingFlowProps {
   initialAgeBand?: string | null;
   parentEmail?: string | null;
   onComplete: (payload: {
+    accountType: AccountType;
     nickname: string;
     ageYears: number;
     ageBand: string;
@@ -32,10 +41,24 @@ const AVATAR_TONES: Array<{
   swatch: string;
 }> = [
   { id: 'sky', labelVi: 'Xanh dương', labelEn: 'Sky', swatch: '#0284C7' },
-  { id: 'emerald', labelVi: 'Ngọc lục bảo', labelEn: 'Emerald', swatch: '#059669' },
+  {
+    id: 'emerald',
+    labelVi: 'Ngọc lục bảo',
+    labelEn: 'Emerald',
+    swatch: '#059669',
+  },
   { id: 'amber', labelVi: 'Hổ phách', labelEn: 'Amber', swatch: '#D97706' },
   { id: 'rose', labelVi: 'San hô', labelEn: 'Rose', swatch: '#E11D48' },
 ];
+
+function isTeenBand(group: AgeGroupConfig | null | undefined): boolean {
+  if (!group) return false;
+  return (
+    group.minAge >= 12 ||
+    group.stage === 'middle_school' ||
+    group.stage === 'high_school'
+  );
+}
 
 export function LearnerOnboardingFlow({
   interfaceLocale,
@@ -47,18 +70,27 @@ export function LearnerOnboardingFlow({
 }: LearnerOnboardingFlowProps) {
   const isVi = interfaceLocale === 'vi';
   const [step, setStep] = useState<1 | 2>(1);
+
+  const initialMatchedGroup =
+    ageGroups.find((g) => g.id === initialAgeBand) ?? ageGroups[0] ?? null;
+
+  const [accountType, setAccountType] = useState<AccountType>(() =>
+    isTeenBand(initialMatchedGroup) ? 'student' : 'parent'
+  );
   const [nickname, setNickname] = useState('');
 
-  const defaultGroup =
-    ageGroups.find((g) => g.id === initialAgeBand) ?? ageGroups[0] ?? null;
   const [selectedBandId, setSelectedBandId] = useState<string>(
-    defaultGroup?.id ?? '3-5'
+    initialMatchedGroup?.id ?? '3-5'
   );
   const [ageYears, setAgeYears] = useState<number>(
-    defaultGroup ? Math.round((defaultGroup.minAge + defaultGroup.maxAge) / 2) : 4
+    initialMatchedGroup
+      ? Math.round((initialMatchedGroup.minAge + initialMatchedGroup.maxAge) / 2)
+      : 4
   );
   const [gradeLevel, setGradeLevel] = useState<number>(
-    defaultGroup && defaultGroup.grades.length > 0 ? defaultGroup.grades[0] : 0
+    initialMatchedGroup && initialMatchedGroup.grades.length > 0
+      ? initialMatchedGroup.grades[0]
+      : 0
   );
   const [avatarTone, setAvatarTone] =
     useState<LearnerProfile['avatarTone']>('sky');
@@ -72,11 +104,35 @@ export function LearnerOnboardingFlow({
   useEffect(() => {
     if (initialAgeBand && ageGroups.some((g) => g.id === initialAgeBand)) {
       const g = ageGroups.find((x) => x.id === initialAgeBand)!;
+      setAccountType(isTeenBand(g) ? 'student' : 'parent');
       setSelectedBandId(g.id);
       setAgeYears(Math.round((g.minAge + g.maxAge) / 2));
       setGradeLevel(g.grades.length > 0 ? g.grades[0] : 0);
     }
   }, [initialAgeBand, ageGroups]);
+
+  const handleChooseAccountType = (nextType: AccountType) => {
+    setAccountType(nextType);
+    if (nextType === 'student') {
+      const teenGroup =
+        ageGroups.find((g) => isTeenBand(g)) ??
+        ageGroups.find((g) => g.maxAge >= 12) ??
+        ageGroups[ageGroups.length - 1];
+      if (teenGroup && ageYears < 12) {
+        setSelectedBandId(teenGroup.id);
+        setAgeYears(Math.max(12, Math.round((teenGroup.minAge + teenGroup.maxAge) / 2)));
+        setGradeLevel(teenGroup.grades.length > 0 ? teenGroup.grades[0] : 7);
+      }
+    } else {
+      const childGroup =
+        ageGroups.find((g) => !isTeenBand(g)) ?? ageGroups[0];
+      if (childGroup && ageYears >= 12) {
+        setSelectedBandId(childGroup.id);
+        setAgeYears(Math.round((childGroup.minAge + childGroup.maxAge) / 2));
+        setGradeLevel(childGroup.grades.length > 0 ? childGroup.grades[0] : 0);
+      }
+    }
+  };
 
   const activeGroup =
     ageGroups.find((g) => g.id === selectedBandId) ??
@@ -111,9 +167,13 @@ export function LearnerOnboardingFlow({
     e.preventDefault();
     if (!nickname.trim()) {
       setError(
-        isVi
-          ? 'Vui lòng nhập tên gọi của học viên.'
-          : 'Please enter the learner’s name.'
+        accountType === 'student'
+          ? isVi
+            ? 'Vui lòng nhập tên của bạn.'
+            : 'Please enter your name.'
+          : isVi
+            ? 'Vui lòng nhập tên gọi của bé.'
+            : 'Please enter the learner’s name.'
       );
       setStep(1);
       return;
@@ -122,6 +182,7 @@ export function LearnerOnboardingFlow({
     setError(null);
     try {
       await onComplete({
+        accountType,
         nickname: nickname.trim(),
         ageYears,
         ageBand: activeGroup?.id ?? selectedBandId,
@@ -143,6 +204,8 @@ export function LearnerOnboardingFlow({
     }
   };
 
+  const isStudentMode = accountType === 'student';
+
   return (
     <div className="max-w-3xl mx-auto py-4 sm:py-8 space-y-6">
       <div className="space-y-2">
@@ -160,8 +223,8 @@ export function LearnerOnboardingFlow({
         <h1 className="font-display text-3xl sm:text-4xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
           {step === 1
             ? isVi
-              ? 'Thiết lập hồ sơ & lứa tuổi học viên'
-              : 'Set up your learner profile & age'
+              ? 'Chọn loại tài khoản & lứa tuổi học'
+              : 'Choose account mode & learning stage'
             : isVi
               ? 'Chọn ngôn ngữ học tập'
               : 'Choose learning languages'}
@@ -169,11 +232,15 @@ export function LearnerOnboardingFlow({
         <p className="text-sm sm:text-base text-slate-600 dark:text-slate-400">
           {step === 1
             ? isVi
-              ? 'TM-Lingo sẽ tự động lọc các bài học từ vựng, trò chơi và truyện tranh phù hợp nhất theo đúng độ tuổi bạn chọn.'
-              : 'TM-Lingo automatically filters vocabulary decks, games, and stories to match the selected age band.'
-            : isVi
-              ? 'Chọn ngôn ngữ muốn học và ngôn ngữ hỗ trợ giải thích. Bạn luôn có thể thay đổi lại bất cứ lúc nào trong Góc Phụ huynh.'
-              : 'Pick the target language and helper explanation language. You can update these anytime.'}
+              ? 'Hồ sơ sẽ được lưu an toàn trên đám mây (Firebase Firestore) để đồng bộ trên mọi thiết bị.'
+              : 'Your profile is stored securely in Firebase Firestore and syncs across all devices.'
+            : isStudentMode
+              ? isVi
+                ? 'Chọn ngôn ngữ muốn học và ngôn ngữ giải thích. Bạn luôn có thể chỉnh sửa trong mục Tự học.'
+                : 'Pick your target and helper languages. You can update these anytime in your Self-Study Hub.'
+              : isVi
+                ? 'Chọn ngôn ngữ muốn học và ngôn ngữ hỗ trợ giải thích. Bạn luôn có thể thay đổi lại bất cứ lúc nào trong Góc Phụ huynh.'
+                : 'Pick the target language and helper explanation language. You can update these anytime.'}
         </p>
       </div>
 
@@ -189,10 +256,80 @@ export function LearnerOnboardingFlow({
       >
         {step === 1 ? (
           <>
+            {/* Account Mode Selector: Parent (Family 3-11) vs Independent Student (12-18) */}
+            <div className="space-y-2.5">
+              <span className="block text-sm font-semibold text-slate-800 dark:text-slate-200">
+                {isVi ? 'Ai sẽ sử dụng tài khoản này? *' : 'Who will use this account? *'}
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => handleChooseAccountType('parent')}
+                  aria-pressed={!isStudentMode}
+                  className={`text-left rounded-xl border p-4 space-y-1.5 transition-colors cursor-pointer ${
+                    !isStudentMode
+                      ? 'border-accent bg-accent-soft'
+                      : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950/60 hover:border-slate-300 dark:hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100">
+                      <Users className="w-4 h-4 text-accent" aria-hidden="true" />
+                      <span>
+                        {isVi ? 'Phụ huynh / Gia đình' : 'Parent / Family'}
+                      </span>
+                    </span>
+                    {!isStudentMode && (
+                      <Check className="w-4 h-4 text-accent shrink-0" aria-hidden="true" />
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    {isVi
+                      ? 'Tạo và quản lý nhiều hồ sơ cho bé Mầm non – Tiểu học (3–11 tuổi), giới hạn giờ học & theo dõi con Cấp 2–3.'
+                      : 'Manage child profiles (ages 3–11), set daily limits, and optionally view linked teen progress.'}
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleChooseAccountType('student')}
+                  aria-pressed={isStudentMode}
+                  className={`text-left rounded-xl border p-4 space-y-1.5 transition-colors cursor-pointer ${
+                    isStudentMode
+                      ? 'border-accent bg-accent-soft'
+                      : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950/60 hover:border-slate-300 dark:hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100">
+                      <GraduationCap className="w-4 h-4 text-accent" aria-hidden="true" />
+                      <span>
+                        {isVi ? 'Học sinh tự học (Cấp 2–3)' : 'Independent Student (12–18)'}
+                      </span>
+                    </span>
+                    {isStudentMode && (
+                      <Check className="w-4 h-4 text-accent shrink-0" aria-hidden="true" />
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    {isVi
+                      ? 'Tài khoản độc lập cho học sinh THCS & THPT (12–18 tuổi). Tự chủ mục tiêu, không khóa giờ học, có thể tạo mã để ba mẹ chỉ xem tiến độ.'
+                      : 'Self-managed account for Middle & High School learners (12–18). No lockouts, optional read-only parent link.'}
+                  </p>
+                </button>
+              </div>
+            </div>
+
             {/* Learner Name */}
             <label className="block space-y-1.5">
               <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-                {isVi ? 'Tên gọi hoặc biệt danh của học viên *' : 'Learner name or nickname *'}
+                {isStudentMode
+                  ? isVi
+                    ? 'Tên của bạn *'
+                    : 'Your name *'
+                  : isVi
+                    ? 'Tên gọi hoặc biệt danh của bé *'
+                    : 'Child name or nickname *'}
               </span>
               <input
                 type="text"
@@ -200,7 +337,15 @@ export function LearnerOnboardingFlow({
                 maxLength={32}
                 value={nickname}
                 onChange={(e) => setNickname(e.target.value)}
-                placeholder={isVi ? 'Ví dụ: Gia Hân, Minh Khôi...' : 'e.g. Mia, Liam...'}
+                placeholder={
+                  isStudentMode
+                    ? isVi
+                      ? 'Ví dụ: Minh Khôi, Gia Hân...'
+                      : 'e.g. Alex, Mia...'
+                    : isVi
+                      ? 'Ví dụ: Bé Bông, Minh Khôi...'
+                      : 'e.g. Mia, Liam...'
+                }
                 className="w-full min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-4 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400"
               />
             </label>
@@ -310,9 +455,13 @@ export function LearnerOnboardingFlow({
                 onClick={() => {
                   if (!nickname.trim()) {
                     setError(
-                      isVi
-                        ? 'Vui lòng nhập tên gọi của học viên trước khi tiếp tục.'
-                        : 'Please enter the learner’s name first.'
+                      isStudentMode
+                        ? isVi
+                          ? 'Vui lòng nhập tên của bạn trước khi tiếp tục.'
+                          : 'Please enter your name first.'
+                        : isVi
+                          ? 'Vui lòng nhập tên gọi của bé trước khi tiếp tục.'
+                          : 'Please enter the learner’s name first.'
                     );
                     return;
                   }
@@ -422,9 +571,13 @@ export function LearnerOnboardingFlow({
                   <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
                 )}
                 <span>
-                  {isVi
-                    ? 'Hoàn tất & Mở bài học theo tuổi'
-                    : 'Finish & Open Age-Matched Lessons'}
+                  {isStudentMode
+                    ? isVi
+                      ? 'Hoàn tất & Bắt đầu tự học'
+                      : 'Finish & Start Self-Study'
+                    : isVi
+                      ? 'Hoàn tất & Mở bài học theo tuổi'
+                      : 'Finish & Open Age-Matched Lessons'}
                 </span>
               </button>
             </div>

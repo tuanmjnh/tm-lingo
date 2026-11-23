@@ -24,6 +24,14 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidAgeBand(band) {
+      return band is string && band.size() >= 1 && band.size() <= 32 && band.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidInviteCode(code) {
+      return code is string && code.size() == 6 && code.matches('^[A-Z0-9]{6}$');
+    }
+
     function isValidLocale(code) {
       return code is string && code.size() >= 2 && code.size() <= 10 && code.matches('^[a-zA-Z\\-]+$');
     }
@@ -45,14 +53,17 @@ service cloud.firestore {
     }
 
     function isValidParentAccount(data, parentId) {
-      return data.keys().hasAll(['parentId', 'displayName', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['parentId', 'displayName', 'createdAt', 'updatedAt'])
+      return data.keys().hasAll(['parentId', 'displayName', 'accountType', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['parentId', 'displayName', 'accountType', 'createdAt', 'updatedAt'])
         && data.parentId == request.auth.uid
         && data.parentId == parentId
         && isValidId(data.parentId)
         && data.displayName is string
         && data.displayName.size() >= 1
         && data.displayName.size() <= 80
+        && data.accountType is string
+        && data.accountType.size() <= 16
+        && data.accountType in ['parent', 'student']
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -63,6 +74,8 @@ service cloud.firestore {
           'parentId',
           'nickname',
           'ageYears',
+          'ageBand',
+          'gradeLevel',
           'avatarTone',
           'interfaceLocale',
           'learningLocale',
@@ -70,6 +83,7 @@ service cloud.firestore {
           'narrationLocale',
           'reducedMotion',
           'dailyMinutesLimit',
+          'storyDailyMinutesLimit',
           'audioSpeed',
           'createdAt',
           'updatedAt'
@@ -79,6 +93,8 @@ service cloud.firestore {
           'parentId',
           'nickname',
           'ageYears',
+          'ageBand',
+          'gradeLevel',
           'avatarTone',
           'interfaceLocale',
           'learningLocale',
@@ -86,6 +102,7 @@ service cloud.firestore {
           'narrationLocale',
           'reducedMotion',
           'dailyMinutesLimit',
+          'storyDailyMinutesLimit',
           'audioSpeed',
           'createdAt',
           'updatedAt'
@@ -99,7 +116,11 @@ service cloud.firestore {
         && data.nickname.size() <= 32
         && data.ageYears is int
         && data.ageYears >= 3
-        && data.ageYears <= 5
+        && data.ageYears <= 18
+        && isValidAgeBand(data.ageBand)
+        && data.gradeLevel is int
+        && data.gradeLevel >= 0
+        && data.gradeLevel <= 12
         && data.avatarTone is string
         && data.avatarTone.size() <= 16
         && data.avatarTone in ['sky', 'amber', 'emerald', 'rose']
@@ -110,10 +131,13 @@ service cloud.firestore {
         && data.reducedMotion is bool
         && data.dailyMinutesLimit is int
         && data.dailyMinutesLimit >= 5
-        && data.dailyMinutesLimit <= 60
+        && data.dailyMinutesLimit <= 180
+        && data.storyDailyMinutesLimit is int
+        && data.storyDailyMinutesLimit >= 5
+        && data.storyDailyMinutesLimit <= 120
         && (data.audioSpeed is float || data.audioSpeed is int)
         && data.audioSpeed >= 0.65
-        && data.audioSpeed <= 1.25
+        && data.audioSpeed <= 1.5
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -158,14 +182,14 @@ service cloud.firestore {
         && data.mode.size() <= 16
         && data.mode in ['guided', 'flashcards', 'listening', 'game', 'story', 'explore']
         && data.completedActivityIds is list
-        && data.completedActivityIds.size() <= 20
+        && data.completedActivityIds.size() <= 50
         && (data.completedActivityIds.size() == 0 || (data.completedActivityIds[0] is string && data.completedActivityIds[0].size() <= 64))
         && data.totalActivities is int
         && data.totalActivities >= 1
-        && data.totalActivities <= 50
+        && data.totalActivities <= 100
         && data.lastActivityIndex is int
         && data.lastActivityIndex >= 0
-        && data.lastActivityIndex <= 50
+        && data.lastActivityIndex <= 100
         && data.completed is bool
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -201,7 +225,139 @@ service cloud.firestore {
         && isValidLocale(data.narrationLocale)
         && data.segmentIndex is int
         && data.segmentIndex >= 0
-        && data.segmentIndex <= 100
+        && data.segmentIndex <= 200
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFamilyInvite(data, inviteCode) {
+      return data.keys().hasAll([
+          'inviteCode',
+          'studentUid',
+          'studentName',
+          'ageYears',
+          'ageBand',
+          'gradeLevel',
+          'status',
+          'claimedByParentUid',
+          'expiresAt',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'inviteCode',
+          'studentUid',
+          'studentName',
+          'ageYears',
+          'ageBand',
+          'gradeLevel',
+          'status',
+          'claimedByParentUid',
+          'expiresAt',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.inviteCode == inviteCode
+        && isValidInviteCode(data.inviteCode)
+        && isValidId(data.studentUid)
+        && data.studentName is string
+        && data.studentName.size() >= 1
+        && data.studentName.size() <= 32
+        && data.ageYears is int
+        && data.ageYears >= 3
+        && data.ageYears <= 18
+        && isValidAgeBand(data.ageBand)
+        && data.gradeLevel is int
+        && data.gradeLevel >= 0
+        && data.gradeLevel <= 12
+        && data.status is string
+        && data.status.size() <= 16
+        && data.status in ['active', 'claimed', 'revoked']
+        && data.claimedByParentUid is string
+        && data.claimedByParentUid.size() <= 128
+        && (data.claimedByParentUid == '' || isValidId(data.claimedByParentUid))
+        && data.expiresAt is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidObserverLink(data, linkId) {
+      return data.keys().hasAll([
+          'linkId',
+          'parentUid',
+          'studentUid',
+          'parentDisplayName',
+          'studentName',
+          'ageYears',
+          'ageBand',
+          'gradeLevel',
+          'avatarTone',
+          'inviteCode',
+          'completedLessonsCount',
+          'totalActivitiesCompleted',
+          'currentStreakDays',
+          'dailyMinutesGoal',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'linkId',
+          'parentUid',
+          'studentUid',
+          'parentDisplayName',
+          'studentName',
+          'ageYears',
+          'ageBand',
+          'gradeLevel',
+          'avatarTone',
+          'inviteCode',
+          'completedLessonsCount',
+          'totalActivitiesCompleted',
+          'currentStreakDays',
+          'dailyMinutesGoal',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.linkId == linkId
+        && isValidId(data.linkId)
+        && isValidId(data.parentUid)
+        && isValidId(data.studentUid)
+        && data.parentUid != data.studentUid
+        && data.linkId == data.parentUid + '_' + data.studentUid
+        && data.parentDisplayName is string
+        && data.parentDisplayName.size() >= 1
+        && data.parentDisplayName.size() <= 80
+        && data.studentName is string
+        && data.studentName.size() >= 1
+        && data.studentName.size() <= 32
+        && data.ageYears is int
+        && data.ageYears >= 3
+        && data.ageYears <= 18
+        && isValidAgeBand(data.ageBand)
+        && data.gradeLevel is int
+        && data.gradeLevel >= 0
+        && data.gradeLevel <= 12
+        && data.avatarTone is string
+        && data.avatarTone.size() <= 16
+        && data.avatarTone in ['sky', 'amber', 'emerald', 'rose']
+        && isValidInviteCode(data.inviteCode)
+        && data.completedLessonsCount is int
+        && data.completedLessonsCount >= 0
+        && data.completedLessonsCount <= 5000
+        && data.totalActivitiesCompleted is int
+        && data.totalActivitiesCompleted >= 0
+        && data.totalActivitiesCompleted <= 50000
+        && data.currentStreakDays is int
+        && data.currentStreakDays >= 0
+        && data.currentStreakDays <= 3650
+        && data.dailyMinutesGoal is int
+        && data.dailyMinutesGoal >= 5
+        && data.dailyMinutesGoal <= 180
+        && data.status is string
+        && data.status.size() <= 16
+        && data.status in ['active', 'revoked']
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -220,7 +376,11 @@ service cloud.firestore {
         && incoming().parentId == existing().parentId
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt']);
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['accountType', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'accountType', 'updatedAt'])
+        );
       allow delete: if isVerifiedOwner(parentId) && isValidId(parentId);
 
       match /learners/{learnerId} {
@@ -253,13 +413,19 @@ service cloud.firestore {
               'narrationLocale',
               'reducedMotion',
               'dailyMinutesLimit',
+              'storyDailyMinutesLimit',
               'audioSpeed',
               'updatedAt'
             ])
             || incoming().diff(existing()).affectedKeys().hasOnly([
               'nickname',
               'ageYears',
+              'ageBand',
+              'gradeLevel',
               'avatarTone',
+              'dailyMinutesLimit',
+              'storyDailyMinutesLimit',
+              'audioSpeed',
               'updatedAt'
             ])
           )
@@ -347,6 +513,123 @@ service cloud.firestore {
           && isValidId(positionId)
           && parentExists(parentId);
       }
+    }
+
+    match /familyInvites/{inviteCode} {
+      allow get: if isVerifiedUser() && isValidInviteCode(inviteCode);
+      allow list: if isVerifiedUser()
+        && resource.data.studentUid == request.auth.uid;
+      allow create: if isVerifiedUser()
+        && isValidInviteCode(inviteCode)
+        && isValidFamilyInvite(incoming(), inviteCode)
+        && incoming().studentUid == request.auth.uid
+        && incoming().status == 'active'
+        && incoming().claimedByParentUid == ''
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && incoming().expiresAt > request.time
+        && incoming().expiresAt <= request.time + duration.value(14, 'd')
+        && parentExists(request.auth.uid);
+      allow update: if isVerifiedUser()
+        && isValidInviteCode(inviteCode)
+        && isValidFamilyInvite(incoming(), inviteCode)
+        && incoming().inviteCode == existing().inviteCode
+        && incoming().studentUid == existing().studentUid
+        && incoming().studentName == existing().studentName
+        && incoming().ageYears == existing().ageYears
+        && incoming().ageBand == existing().ageBand
+        && incoming().gradeLevel == existing().gradeLevel
+        && incoming().expiresAt == existing().expiresAt
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Student revokes own active code
+          (
+            existing().studentUid == request.auth.uid
+            && existing().status == 'active'
+            && incoming().status == 'revoked'
+            && incoming().claimedByParentUid == ''
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+          // Action 2: Parent atomically claims active non-expired code alongside ObserverLink creation
+          || (
+            existing().studentUid != request.auth.uid
+            && existing().status == 'active'
+            && existing().expiresAt > request.time
+            && incoming().status == 'claimed'
+            && incoming().claimedByParentUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status',
+              'claimedByParentUid',
+              'updatedAt'
+            ])
+            && existsAfter(/databases/$(database)/documents/observerLinks/$(request.auth.uid + '_' + existing().studentUid))
+          )
+        );
+      allow delete: if isVerifiedUser()
+        && isValidInviteCode(inviteCode)
+        && existing().studentUid == request.auth.uid;
+    }
+
+    match /observerLinks/{linkId} {
+      allow get: if isVerifiedUser()
+        && isValidId(linkId)
+        && (existing().parentUid == request.auth.uid || existing().studentUid == request.auth.uid);
+      allow list: if isVerifiedUser()
+        && (resource.data.parentUid == request.auth.uid || resource.data.studentUid == request.auth.uid);
+      allow create: if isVerifiedUser()
+        && isValidId(linkId)
+        && isValidObserverLink(incoming(), linkId)
+        && incoming().parentUid == request.auth.uid
+        && incoming().status == 'active'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && parentExists(request.auth.uid)
+        && get(/databases/$(database)/documents/familyInvites/$(incoming().inviteCode)).data.studentUid == incoming().studentUid
+        && get(/databases/$(database)/documents/familyInvites/$(incoming().inviteCode)).data.status == 'active'
+        && get(/databases/$(database)/documents/familyInvites/$(incoming().inviteCode)).data.expiresAt > request.time
+        && getAfter(/databases/$(database)/documents/familyInvites/$(incoming().inviteCode)).data.status == 'claimed'
+        && getAfter(/databases/$(database)/documents/familyInvites/$(incoming().inviteCode)).data.claimedByParentUid == request.auth.uid;
+      allow update: if isVerifiedUser()
+        && isValidId(linkId)
+        && isValidObserverLink(incoming(), linkId)
+        && incoming().linkId == existing().linkId
+        && incoming().parentUid == existing().parentUid
+        && incoming().studentUid == existing().studentUid
+        && incoming().inviteCode == existing().inviteCode
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Student updates read-only progress metrics snapshot
+          (
+            existing().studentUid == request.auth.uid
+            && existing().status == 'active'
+            && incoming().status == 'active'
+            && incoming().parentDisplayName == existing().parentDisplayName
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'studentName',
+              'ageYears',
+              'ageBand',
+              'gradeLevel',
+              'avatarTone',
+              'completedLessonsCount',
+              'totalActivitiesCompleted',
+              'currentStreakDays',
+              'dailyMinutesGoal',
+              'updatedAt'
+            ])
+          )
+          // Action 2: Either student or parent revokes link
+          || (
+            (existing().studentUid == request.auth.uid || existing().parentUid == request.auth.uid)
+            && existing().status == 'active'
+            && incoming().status == 'revoked'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+      allow delete: if isVerifiedUser()
+        && isValidId(linkId)
+        && (existing().parentUid == request.auth.uid || existing().studentUid == request.auth.uid);
     }
   }
 }

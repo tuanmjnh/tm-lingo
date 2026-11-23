@@ -14,6 +14,8 @@ import {
   Headphones,
   Home,
   Layers,
+  Mail,
+  RefreshCw,
   Settings,
   Sparkles,
   Sun,
@@ -21,6 +23,7 @@ import {
   Users,
 } from 'lucide-react';
 import type {
+  AccountType,
   AgeGroupConfig,
   AuthUserProfile,
   DeleteMode,
@@ -33,6 +36,8 @@ import type {
   MediaAssetRecord,
 } from '../packages/contracts/types';
 import {
+  reloadParentAuthUser,
+  resendParentVerificationEmail,
   signInParentWithEmail,
   signInParentWithGoogle,
   signOutParent,
@@ -40,6 +45,20 @@ import {
   subscribeParentAuth,
 } from './lib/firebaseAuth';
 import { apiClient } from './shared/apiClient';
+import {
+  createFirestoreLearner,
+  ensureParentAccount,
+  getAccountDoc,
+  listFirestoreLearners,
+  saveFirestoreProgress,
+  saveFirestoreStoryPosition,
+  subscribeLearners,
+  subscribeProgress,
+  syncStudentObserverSnapshots,
+  updateFirestoreLearnerPreferences,
+  updateFirestoreLearnerProfile,
+  upsertAccountDoc,
+} from './shared/firestoreService';
 import { flushOfflineQueue } from './lib/offlineQueue';
 import {
   computeGoalStreak,
@@ -80,6 +99,7 @@ import { FamilyHomeDashboard } from './features/home/FamilyHomeDashboard';
 import { LessonPlayer } from './features/lesson-player/LessonPlayer';
 import { StoryReader } from './features/story-reader/StoryReader';
 import { ParentPanel } from './features/parent/ParentPanel';
+import { StudentSelfHub } from './features/student/StudentSelfHub';
 import { AdminWorkspace } from './features/admin/AdminWorkspace';
 import { AdminLoginView } from './features/admin/AdminLoginView';
 
@@ -223,11 +243,14 @@ export function App({ initialTab = 'home' }: AppProps) {
     return () => mq.removeEventListener('change', handleMediaChange);
   }, [appearance]);
 
-  // Dual Auth Track 1: Parent Account
+  // Dual Auth Track 1: Consumer Account (Parent/Family 3-11 OR Independent Student 12-18)
   const [parentUser, setParentUser] = useState<AuthUserProfile | null>(null);
+  const [accountType, setAccountType] = useState<AccountType>('parent');
   const [parentAuthBusy, setParentAuthBusy] = useState(false);
   const [parentAuthError, setParentAuthError] = useState<string | null>(null);
   const [parentAuthNotice, setParentAuthNotice] = useState<string | null>(null);
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const [verifyMessage, setVerifyMessage] = useState<string | null>(null);
 
   // Dual Auth Track 2: Staff Session
   const [staffUser, setStaffUser] = useState<AuthUserProfile | null>(null);
@@ -271,36 +294,55 @@ export function App({ initialTab = 'home' }: AppProps) {
   const [parentGateUnlockedSession, setParentGateUnlockedSession] =
     useState(false);
 
-  // Subscribe to Parent Auth (non-blocking)
+  // Subscribe to Consumer Auth (Firebase)
   useEffect(() => {
     let mounted = true;
     const unsubscribe = subscribeParentAuth((fbUser) => {
       if (!mounted) return;
       if (!fbUser) {
         setParentUser(null);
+        setAccountType('parent');
         setLearners([]);
         setActiveLearnerId('');
         setProgressRecords([]);
         return;
       }
-      setParentUser({
+      const nextProfile: AuthUserProfile = {
         id: fbUser.uid,
         email: fbUser.email ?? null,
         displayName: fbUser.displayName ?? fbUser.email ?? null,
         role: 'parent',
+        emailVerified: fbUser.emailVerified,
         provider: 'firebase',
-      });
+      };
+      setParentUser(nextProfile);
       setAuthModalOpen(false);
       setParentAuthError(null);
+
+      if (fbUser.emailVerified) {
+        void getAccountDoc(fbUser.uid)
+          .then((acc) => {
+            if (mounted && acc?.accountType) {
+              setAccountType(acc.accountType);
+            }
+          })
+          .catch(() => undefined);
+      }
+
       apiClient
         .getCurrentUser()
         .then((res) => {
-          if (mounted && res.user) {
-            setParentUser(res.user);
+          const apiUser = res.user;
+          if (mounted && apiUser) {
+            setParentUser((prev) => ({
+              ...apiUser,
+              emailVerified: prev?.emailVerified ?? fbUser.emailVerified,
+              accountType: prev?.accountType,
+            }));
           }
         })
         .catch(() => {
-          // Keep optimistic parent profile
+          // Keep Firebase profile directly — Firestore works independently of backend RAM
         });
     });
 
@@ -396,19 +438,24 @@ export function App({ initialTab = 'home' }: AppProps) {
     }
   }, []);
 
+  const verifiedFirebaseUid =
+    parentUser &&
+    parentUser.provider === 'firebase' &&
+    parentUser.emailVerified !== false
+      ? parentUser.id
+      : null;
+
   const loadBootstrapData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [langRes, ageRes, learnerRes, pkgRes] = await Promise.all([
+      const [langRes, ageRes, pkgRes] = await Promise.all([
         apiClient.getLanguages(),
         apiClient.getAgeGroups().catch(() => ({ ageGroups: [] })),
-        apiClient.getLearners(),
         apiClient.getPackages(),
       ]);
       setLanguages(langRes.languages);
       setAgeGroups(ageRes.ageGroups);
-      setLearners(learnerRes.learners);
       setPackages(pkgRes.packages);
       if (pkgRes.packages.length > 0) {
         setActivePackageId((prev) =>
@@ -417,13 +464,25 @@ export function App({ initialTab = 'home' }: AppProps) {
             : pkgRes.packages[0].id
         );
       }
-      if (learnerRes.learners.length > 0) {
-        setActiveLearnerId((prev) =>
-          learnerRes.learners.some((l) => l.id === prev)
-            ? prev
-            : learnerRes.learners[0].id
-        );
+
+      if (verifiedFirebaseUid) {
+        const [accDoc, fsLearners] = await Promise.all([
+          getAccountDoc(verifiedFirebaseUid).catch(() => null),
+          listFirestoreLearners(verifiedFirebaseUid).catch(() => []),
+        ]);
+        if (accDoc?.accountType) {
+          setAccountType(accDoc.accountType);
+        }
+        setLearners(fsLearners);
+        if (fsLearners.length > 0) {
+          setActiveLearnerId((prev) =>
+            fsLearners.some((l) => l.id === prev) ? prev : fsLearners[0].id
+          );
+        } else {
+          setActiveLearnerId('');
+        }
       } else {
+        setLearners([]);
         setActiveLearnerId('');
       }
     } catch (err) {
@@ -433,11 +492,33 @@ export function App({ initialTab = 'home' }: AppProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [verifiedFirebaseUid]);
 
   useEffect(() => {
     void loadBootstrapData();
-  }, [parentUser?.id, loadBootstrapData]);
+  }, [verifiedFirebaseUid, loadBootstrapData]);
+
+  // Real-time Firebase Firestore subscription for learner profiles (syncs across devices & Cloudflare restarts)
+  useEffect(() => {
+    if (!verifiedFirebaseUid) return;
+    const unsubscribe = subscribeLearners(
+      verifiedFirebaseUid,
+      (fsLearners) => {
+        setLearners(fsLearners);
+        if (fsLearners.length > 0) {
+          setActiveLearnerId((prev) =>
+            fsLearners.some((l) => l.id === prev) ? prev : fsLearners[0].id
+          );
+        } else {
+          setActiveLearnerId('');
+        }
+      },
+      () => {
+        // Ignore transient offline listener errors; initial list already hydrated
+      }
+    );
+    return () => unsubscribe();
+  }, [verifiedFirebaseUid]);
 
   const loadLanguages = useCallback(async () => {
     try {
@@ -475,20 +556,40 @@ export function App({ initialTab = 'home' }: AppProps) {
     void loadAdminMedia();
   }, [loadAdminMedia]);
 
-  const refreshProgress = useCallback(async (learnerId: string) => {
-    if (!learnerId) return;
-    try {
-      const res = await apiClient.getProgress(learnerId);
-      setProgressRecords(res.progress);
-    } catch {
-      // non-blocking
-    }
-  }, []);
+  const refreshProgress = useCallback(
+    async (learnerId: string) => {
+      if (!learnerId || verifiedFirebaseUid) return;
+      try {
+        const res = await apiClient.getProgress(learnerId);
+        setProgressRecords(res.progress);
+      } catch {
+        // non-blocking
+      }
+    },
+    [verifiedFirebaseUid]
+  );
 
+  // Real-time Firebase Firestore progress subscription for active learner
   useEffect(() => {
-    if (!activeLearnerId) return;
+    if (!activeLearnerId) {
+      setProgressRecords([]);
+      return;
+    }
+    if (verifiedFirebaseUid) {
+      const unsubscribe = subscribeProgress(
+        verifiedFirebaseUid,
+        activeLearnerId,
+        (records) => {
+          setProgressRecords(records);
+        },
+        () => {
+          // non-blocking
+        }
+      );
+      return () => unsubscribe();
+    }
     void refreshProgress(activeLearnerId);
-  }, [activeLearnerId, parentUser?.id, refreshProgress]);
+  }, [activeLearnerId, verifiedFirebaseUid, refreshProgress]);
 
   // Flush IndexedDB offline sync queue on mount and reconnect
   useEffect(() => {
@@ -496,13 +597,23 @@ export function App({ initialTab = 'home' }: AppProps) {
     const runFlush = () => {
       void flushOfflineQueue({
         syncProgress: (lessonId, payload) =>
-          apiClient.saveProgress(lessonId, payload),
+          verifiedFirebaseUid
+            ? saveFirestoreProgress(verifiedFirebaseUid, {
+                lessonId,
+                ...payload,
+              })
+            : apiClient.saveProgress(lessonId, payload),
         syncStoryPosition: (storyId, payload) =>
-          apiClient.saveStoryPosition(storyId, payload),
+          verifiedFirebaseUid
+            ? saveFirestoreStoryPosition(verifiedFirebaseUid, {
+                storyId,
+                ...payload,
+              })
+            : apiClient.saveStoryPosition(storyId, payload),
       }).then((res) => {
         if (!active || res.synced === 0) return;
         setLastSyncedCount(res.synced);
-        if (activeLearnerId) {
+        if (activeLearnerId && !verifiedFirebaseUid) {
           void refreshProgress(activeLearnerId);
         }
         setTimeout(() => {
@@ -517,7 +628,7 @@ export function App({ initialTab = 'home' }: AppProps) {
       active = false;
       window.removeEventListener('online', runFlush);
     };
-  }, [activeLearnerId, refreshProgress]);
+  }, [activeLearnerId, verifiedFirebaseUid, refreshProgress]);
 
   // Independent daily time trackers: Learn (timed) + Picture Stories (timed separately).
   // Audiobooks & Long Stories remain 100% unlimited!
@@ -736,7 +847,7 @@ export function App({ initialTab = 'home' }: AppProps) {
     }
   };
 
-  // ---------- Learner & Media Handlers ----------
+  // ---------- Learner & Media Handlers (Cloud-Persisted in Firestore) ----------
   const handleUpdatePreferences = async (patch: Partial<LearnerPreferences>) => {
     if (!activeLearner) return;
     setLearners((prev) =>
@@ -746,6 +857,14 @@ export function App({ initialTab = 'home' }: AppProps) {
           : l
       )
     );
+    if (verifiedFirebaseUid) {
+      await updateFirestoreLearnerPreferences(
+        verifiedFirebaseUid,
+        activeLearner.id,
+        patch
+      );
+      return;
+    }
     const res = await apiClient.updateLearnerPreferences(
       activeLearner.id,
       patch
@@ -756,6 +875,7 @@ export function App({ initialTab = 'home' }: AppProps) {
   };
 
   const handleCreateLearner = async (payload: {
+    accountType?: AccountType;
     nickname: string;
     ageYears: number;
     ageBand?: string;
@@ -772,6 +892,53 @@ export function App({ initialTab = 'home' }: AppProps) {
       payload.explanationLocale ??
       activeLearner?.preferences.explanationLocale ??
       (currentInterfaceLocale === 'en' ? 'en' : 'vi');
+
+    const matchedGroup =
+      ageGroups.find((g) => g.id === payload.ageBand) ??
+      ageGroups.find(
+        (g) => payload.ageYears >= g.minAge && payload.ageYears <= g.maxAge
+      );
+
+    if (verifiedFirebaseUid) {
+      const targetAccountType: AccountType = payload.accountType ?? accountType;
+      const accountDisplayName =
+        parentUser?.displayName?.trim() ||
+        parentUser?.email?.split('@')[0] ||
+        payload.nickname;
+      await upsertAccountDoc(
+        verifiedFirebaseUid,
+        accountDisplayName,
+        targetAccountType
+      );
+      setAccountType(targetAccountType);
+
+      const created = await createFirestoreLearner(verifiedFirebaseUid, {
+        nickname: payload.nickname,
+        ageYears: payload.ageYears,
+        ageBand: payload.ageBand ?? matchedGroup?.id,
+        gradeLevel: payload.gradeLevel,
+        avatarTone: payload.avatarTone,
+        interfaceLocale: currentInterfaceLocale,
+        learningLocale,
+        explanationLocale,
+        narrationLocale: learningLocale,
+        dailyMinutesLimit: matchedGroup?.uiProfile.defaultDailyMinutes,
+        audioSpeed: matchedGroup?.uiProfile.defaultAudioSpeed,
+      });
+
+      setLearners((prev) =>
+        prev.some((l) => l.id === created.id) ? prev : [...prev, created]
+      );
+      setActiveLearnerId(created.id);
+      setPackageAgeFilter(created.ageBand);
+      const matchedPkg = packages.find((p) =>
+        p.ageBand.includes(created.ageBand)
+      );
+      if (matchedPkg) {
+        setActivePackageId(matchedPkg.id);
+      }
+      return;
+    }
 
     const res = await apiClient.createLearner({
       nickname: payload.nickname,
@@ -802,14 +969,104 @@ export function App({ initialTab = 'home' }: AppProps) {
       ageYears?: number;
       ageBand?: string;
       gradeLevel?: number | null;
+      avatarTone?: LearnerProfile['avatarTone'];
       applyAgeDefaults?: boolean;
     }
   ) => {
+    if (verifiedFirebaseUid) {
+      const matchedGroup = patch.applyAgeDefaults
+        ? (ageGroups.find((g) => g.id === patch.ageBand) ??
+          (typeof patch.ageYears === 'number'
+            ? ageGroups.find(
+                (g) =>
+                  patch.ageYears! >= g.minAge && patch.ageYears! <= g.maxAge
+              )
+            : undefined))
+        : undefined;
+
+      await updateFirestoreLearnerProfile(verifiedFirebaseUid, learnerId, {
+        nickname: patch.nickname,
+        ageYears: patch.ageYears,
+        ageBand: patch.ageBand,
+        gradeLevel: patch.gradeLevel,
+        avatarTone: patch.avatarTone,
+        dailyMinutesLimit: matchedGroup?.uiProfile.defaultDailyMinutes,
+        audioSpeed: matchedGroup?.uiProfile.defaultAudioSpeed,
+      });
+      return;
+    }
     const res = await apiClient.updateLearnerProfile(learnerId, patch);
     setLearners((prev) =>
       prev.map((l) => (l.id === res.learner.id ? res.learner : l))
     );
   };
+
+  const parentAccountLabel =
+    parentUser?.displayName?.trim() || parentUser?.email || 'User';
+
+  // Ensure root account exists when a verified Firebase user logs in
+  useEffect(() => {
+    if (!verifiedFirebaseUid) return;
+    void ensureParentAccount(
+      verifiedFirebaseUid,
+      parentAccountLabel,
+      accountType
+    ).catch(() => undefined);
+  }, [verifiedFirebaseUid, parentAccountLabel, accountType]);
+
+  const activeLearnerForSync =
+    learners.find((l) => l.id === activeLearnerId) ?? learners[0] ?? null;
+  const syncLearnerId = activeLearnerForSync?.id ?? '';
+  const syncStudentName = activeLearnerForSync?.nickname ?? '';
+  const syncAgeYears = activeLearnerForSync?.ageYears ?? 13;
+  const syncAgeBand = activeLearnerForSync?.ageBand ?? '12-14';
+  const syncGradeLevel = activeLearnerForSync?.gradeLevel ?? 7;
+  const syncAvatarTone = activeLearnerForSync?.avatarTone ?? 'sky';
+  const syncDailyGoal =
+    activeLearnerForSync?.preferences.dailyMinutesLimit ?? 30;
+  const syncCompletedLessonsCount = progressRecords.filter(
+    (r) => r.completed
+  ).length;
+  const syncTotalActivitiesCompleted = progressRecords.reduce(
+    (sum, r) => sum + r.completedActivityIds.length,
+    0
+  );
+
+  // Sync independent student progress snapshot to any linked parent observers
+  useEffect(() => {
+    if (
+      !verifiedFirebaseUid ||
+      accountType !== 'student' ||
+      !syncLearnerId ||
+      !syncStudentName
+    ) {
+      return;
+    }
+    const streak = computeGoalStreak(syncLearnerId);
+    void syncStudentObserverSnapshots(verifiedFirebaseUid, {
+      studentName: syncStudentName,
+      ageYears: syncAgeYears,
+      ageBand: syncAgeBand,
+      gradeLevel: syncGradeLevel,
+      avatarTone: syncAvatarTone,
+      completedLessonsCount: syncCompletedLessonsCount,
+      totalActivitiesCompleted: syncTotalActivitiesCompleted,
+      currentStreakDays: streak.currentStreak,
+      dailyMinutesGoal: syncDailyGoal,
+    });
+  }, [
+    verifiedFirebaseUid,
+    accountType,
+    syncLearnerId,
+    syncStudentName,
+    syncAgeYears,
+    syncAgeBand,
+    syncGradeLevel,
+    syncAvatarTone,
+    syncDailyGoal,
+    syncCompletedLessonsCount,
+    syncTotalActivitiesCompleted,
+  ]);
 
   const handleUploadMedia = async (payload: {
     file: File;
@@ -856,6 +1113,7 @@ export function App({ initialTab = 'home' }: AppProps) {
     setKidFocusMode(false);
     if (
       tab === 'parents' &&
+      accountType !== 'student' &&
       !parentGateUnlockedSession &&
       isParentalGateEnabled()
     ) {
@@ -921,18 +1179,24 @@ export function App({ initialTab = 'home' }: AppProps) {
   const completedLessonToday = (todayEntry?.lessonsCompleted ?? 0) > 0;
   const completedStoryToday = (todayEntry?.storiesRead ?? 0) > 0;
 
+  const isStudentAccount = accountType === 'student';
+
   const dailyLimitMinutes =
     (activeLearner?.preferences.dailyMinutesLimit ?? 15) + extraMinutesGranted;
   const dailyUsedMinutes = Math.floor(dailyUsedSeconds / 60);
   const isDailyLimitReached =
-    Boolean(activeLearner) && dailyUsedMinutes >= dailyLimitMinutes;
+    !isStudentAccount &&
+    Boolean(activeLearner) &&
+    dailyUsedMinutes >= dailyLimitMinutes;
 
   const storyDailyLimitMinutes =
     (activeLearner?.preferences.storyDailyMinutesLimit ?? 15) +
     extraStoryMinutesGranted;
   const storyDailyUsedMinutes = Math.floor(storyDailyUsedSeconds / 60);
   const isStoryLimitReached =
-    Boolean(activeLearner) && storyDailyUsedMinutes >= storyDailyLimitMinutes;
+    !isStudentAccount &&
+    Boolean(activeLearner) &&
+    storyDailyUsedMinutes >= storyDailyLimitMinutes;
 
   // Per-child daily usage snapshot for the Family Home Dashboard
   const dailyUsedMinutesMap: Record<string, number> = {};
@@ -1007,7 +1271,7 @@ export function App({ initialTab = 'home' }: AppProps) {
     ['learn', messages.nav.learn],
     ['stories', messages.nav.stories],
     ['audiobooks', messages.nav.audiobooks],
-    ['parents', messages.nav.parents],
+    ['parents', isStudentAccount ? (isVi ? 'Tự học' : 'My Hub') : messages.nav.parents],
   ];
 
   const isFocusStage =
@@ -1217,8 +1481,96 @@ export function App({ initialTab = 'home' }: AppProps) {
               {isVi ? 'Thử lại' : 'Retry'}
             </button>
           </div>
+        ) : parentUser.emailVerified === false ? (
+          /* Email verification required before writing to cloud Firestore */
+          <section className="max-w-xl mx-auto surface-card rounded-2xl p-8 space-y-5 text-center">
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-sky-50 dark:bg-sky-950/50 text-sky-600 dark:text-sky-400">
+              <Mail className="w-7 h-7" aria-hidden="true" />
+            </div>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">
+              {isVi
+                ? 'Xác nhận email để đồng bộ dữ liệu đám mây'
+                : 'Verify your email to enable cloud sync'}
+            </h1>
+            <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+              {isVi
+                ? `Chúng tôi đã gửi liên kết xác nhận đến ${parentUser.email ?? 'email của bạn'}. Vui lòng mở hộp thư và bấm xác nhận, sau đó nhấn nút bên dưới để tiếp tục.`
+                : `We sent a verification link to ${parentUser.email ?? 'your inbox'}. Confirm your email and click below to continue.`}
+            </p>
+            {verifyMessage && (
+              <p className="text-xs text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 rounded-xl px-3.5 py-2.5">
+                {verifyMessage}
+              </p>
+            )}
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+              <button
+                type="button"
+                disabled={verifyBusy}
+                onClick={async () => {
+                  setVerifyBusy(true);
+                  setVerifyMessage(null);
+                  try {
+                    const refreshed = await reloadParentAuthUser();
+                    if (refreshed?.emailVerified) {
+                      setParentUser((prev) =>
+                        prev ? { ...prev, emailVerified: true } : prev
+                      );
+                    } else {
+                      setVerifyMessage(
+                        isVi
+                          ? 'Email chưa được xác nhận. Vui lòng kiểm tra hộp thư (kể cả mục Spam).'
+                          : 'Email not verified yet. Please check your inbox or spam folder.'
+                      );
+                    }
+                  } finally {
+                    setVerifyBusy(false);
+                  }
+                }}
+                className="inline-flex items-center gap-2 px-5 py-2.5 min-h-[44px] rounded-xl btn-accent text-sm font-semibold disabled:opacity-50 cursor-pointer"
+              >
+                <RefreshCw className="w-4 h-4" aria-hidden="true" />
+                <span>
+                  {isVi ? 'Tôi đã xác nhận email' : 'I verified my email'}
+                </span>
+              </button>
+              <button
+                type="button"
+                disabled={verifyBusy}
+                onClick={async () => {
+                  setVerifyBusy(true);
+                  setVerifyMessage(null);
+                  try {
+                    await resendParentVerificationEmail();
+                    setVerifyMessage(
+                      isVi
+                        ? 'Đã gửi lại email xác nhận.'
+                        : 'Verification email resent.'
+                    );
+                  } catch (err) {
+                    setVerifyMessage(
+                      err instanceof Error
+                        ? err.message
+                        : 'Unable to resend email right now.'
+                    );
+                  } finally {
+                    setVerifyBusy(false);
+                  }
+                }}
+                className="px-4 py-2.5 min-h-[44px] rounded-xl border border-slate-200 dark:border-slate-700 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
+              >
+                {isVi ? 'Gửi lại email' : 'Resend email'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleParentSignOut()}
+                className="px-4 py-2.5 min-h-[44px] rounded-xl text-sm font-medium text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer"
+              >
+                {messages.parent.signOutButton}
+              </button>
+            </div>
+          </section>
         ) : !activeLearner ? (
-          /* State 2: Signed-in New Account — Guided Age & Profile Onboarding */
+          /* State 2: Signed-in New Account — Guided Account Mode, Age & Profile Onboarding */
           <LearnerOnboardingFlow
             interfaceLocale={currentInterfaceLocale}
             ageGroups={ageGroups}
@@ -1231,11 +1583,12 @@ export function App({ initialTab = 'home' }: AppProps) {
             }}
           />
         ) : (
-          /* State 3: Authenticated Workspace with Family Home, Timed Lessons, Timed Stories, and Unlimited Audiobooks */
+          /* State 3: Authenticated Workspace with Family/Student Home, Lessons, Stories, and Unlimited Audiobooks */
           <>
             {activeTab === 'home' && parentUser && (
               <FamilyHomeDashboard
                 parentUser={parentUser}
+                accountType={accountType}
                 learners={learners}
                 activeLearner={activeLearner}
                 ageGroups={ageGroups}
@@ -1851,6 +2204,7 @@ export function App({ initialTab = 'home' }: AppProps) {
                         onOpenStickerBook={() => setStickerBookOpen(true)}
                         onModeChange={setExperienceMode}
                         onOpenStory={() => navigateTab('stories')}
+                        accountUid={verifiedFirebaseUid}
                         onProgressUpdated={() =>
                           void refreshProgress(activeLearner.id)
                         }
@@ -1868,6 +2222,7 @@ export function App({ initialTab = 'home' }: AppProps) {
                     sectionMode="stories"
                     storyUsedMinutes={storyDailyUsedMinutes}
                     storyLimitMinutes={storyDailyLimitMinutes}
+                    accountUid={verifiedFirebaseUid}
                     onSwitchSection={(nextTab) => navigateTab(nextTab)}
                     onOpenPackage={openPackageFromStory}
                   />
@@ -1880,6 +2235,7 @@ export function App({ initialTab = 'home' }: AppProps) {
                     languages={languages}
                     messages={messages}
                     sectionMode="audiobooks"
+                    accountUid={verifiedFirebaseUid}
                     onSwitchSection={(nextTab) => navigateTab(nextTab)}
                     onOpenPackage={openPackageFromStory}
                   />
@@ -1887,30 +2243,45 @@ export function App({ initialTab = 'home' }: AppProps) {
               </>
             )}
 
-            {activeTab === 'parents' && (
-              <ParentPanel
-                authUser={parentUser}
-                authBusy={parentAuthBusy}
-                authError={parentAuthError}
-                authNotice={parentAuthNotice}
-                onSignInGoogle={handleParentSignInGoogle}
-                onSignInEmail={handleParentSignInEmail}
-                onSignUpEmail={handleParentSignUpEmail}
-                onSignOut={handleParentSignOut}
-                learners={learners}
-                activeLearner={activeLearner}
-                ageGroups={ageGroups}
-                languages={languages}
-                progressRecords={progressRecords}
-                messages={messages}
-                onSelectLearner={setActiveLearnerId}
-                onCreateLearner={handleCreateLearner}
-                onUpdateLearnerProfile={handleUpdateLearnerProfile}
-                onUpdatePreferences={handleUpdatePreferences}
-                onFamilyDataChanged={loadBootstrapData}
-                onOpenWordReview={() => setWordReviewOpen(true)}
-              />
-            )}
+            {activeTab === 'parents' &&
+              (isStudentAccount && parentUser ? (
+                <StudentSelfHub
+                  authUser={parentUser}
+                  authBusy={parentAuthBusy}
+                  onSignOut={handleParentSignOut}
+                  studentProfile={activeLearner}
+                  ageGroups={ageGroups}
+                  languages={languages}
+                  progressRecords={progressRecords}
+                  messages={messages}
+                  onUpdateLearnerProfile={handleUpdateLearnerProfile}
+                  onUpdatePreferences={handleUpdatePreferences}
+                  onOpenWordReview={() => setWordReviewOpen(true)}
+                />
+              ) : (
+                <ParentPanel
+                  authUser={parentUser}
+                  authBusy={parentAuthBusy}
+                  authError={parentAuthError}
+                  authNotice={parentAuthNotice}
+                  onSignInGoogle={handleParentSignInGoogle}
+                  onSignInEmail={handleParentSignInEmail}
+                  onSignUpEmail={handleParentSignUpEmail}
+                  onSignOut={handleParentSignOut}
+                  learners={learners}
+                  activeLearner={activeLearner}
+                  ageGroups={ageGroups}
+                  languages={languages}
+                  progressRecords={progressRecords}
+                  messages={messages}
+                  onSelectLearner={setActiveLearnerId}
+                  onCreateLearner={handleCreateLearner}
+                  onUpdateLearnerProfile={handleUpdateLearnerProfile}
+                  onUpdatePreferences={handleUpdatePreferences}
+                  onFamilyDataChanged={loadBootstrapData}
+                  onOpenWordReview={() => setWordReviewOpen(true)}
+                />
+              ))}
           </>
         )}
       </main>
@@ -1959,7 +2330,9 @@ export function App({ initialTab = 'home' }: AppProps) {
                     ? BookOpen
                     : tabKey === 'audiobooks'
                       ? Headphones
-                      : Users;
+                      : isStudentAccount
+                        ? GraduationCap
+                        : Users;
             return (
               <button
                 key={tabKey}

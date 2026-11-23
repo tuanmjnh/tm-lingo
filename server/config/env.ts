@@ -1,12 +1,16 @@
 import crypto from 'node:crypto';
-import fs from 'node:fs';
 import path from 'node:path';
 import dotenv from 'dotenv';
 import { z } from 'zod';
+import firebaseAppletConfig from '../../firebase-applet-config.json';
 
-// Load .env.local first (higher precedence for local overrides), then .env
-dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
-dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+// Load .env.local first (higher precedence for local overrides), then .env when filesystem is available
+try {
+  dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
+  dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+} catch {
+  // Serverless / Cloudflare Workers runtimes inject env vars directly without local .env files
+}
 
 const EPHEMERAL_SESSION_FALLBACK = crypto.randomBytes(32).toString('hex');
 
@@ -160,11 +164,15 @@ export function getRuntimeEnvironmentSummary(mongoStatus?: {
   connected: boolean;
   lastError: string | null;
 }) {
-  const firebaseConfigPath = path.resolve(
-    process.cwd(),
-    'firebase-applet-config.json'
+  const firebaseConfigured = Boolean(
+    (
+      process.env.FIREBASE_PROJECT_ID ||
+      process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
+      process.env.VITE_FIREBASE_PROJECT_ID ||
+      firebaseAppletConfig?.projectId ||
+      ''
+    ).trim()
   );
-  const firebaseConfigured = fs.existsSync(firebaseConfigPath);
   const has = (val: string) => Boolean(val && val.trim().length > 0);
   const mongodbConfigured = has(env.MONGODB_URI);
   const tmHubConfigured = isTmHubConfigured();

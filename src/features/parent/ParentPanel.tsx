@@ -9,6 +9,7 @@ import {
   Flame,
   Globe,
   GraduationCap,
+  Link2,
   Lock,
   LogIn,
   LogOut,
@@ -16,6 +17,7 @@ import {
   Share2,
   Trash2,
   Trophy,
+  Unlink,
   User,
   UserPlus,
   Volume2,
@@ -27,11 +29,17 @@ import type {
   LearnerProfile,
   LessonProgressRecord,
   LocaleConfig,
+  ObserverLinkRecord,
   ParentConsentPurpose,
   ParentPrivacySummary,
 } from '../../../packages/contracts/types';
 import type { UiMessages } from '../../i18n/messages';
 import { apiClient } from '../../shared/apiClient';
+import {
+  redeemStudentInviteCode,
+  subscribeObserverLinksForParent,
+  unlinkObserverLink,
+} from '../../shared/firestoreService';
 import { speakText } from '../../audio/speechPlayer';
 import {
   computeGoalStreak,
@@ -169,6 +177,67 @@ export function ParentPanel({
   const [confirmSoftArchive, setConfirmSoftArchive] = useState(false);
   const [showHardDeleteBox, setShowHardDeleteBox] = useState(false);
   const [hardDeletePhrase, setHardDeletePhrase] = useState('');
+
+  // Linked Teen Independent Students (Read-Only Observer Mode)
+  const [linkedTeens, setLinkedTeens] = useState<ObserverLinkRecord[]>([]);
+  const [teenInviteInput, setTeenInviteInput] = useState('');
+  const [teenLinkBusy, setTeenLinkBusy] = useState(false);
+  const [teenLinkError, setTeenLinkError] = useState<string | null>(null);
+  const [teenLinkNotice, setTeenLinkNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!authUser?.id || authUser.emailVerified === false) {
+      setLinkedTeens([]);
+      return;
+    }
+    const unsub = subscribeObserverLinksForParent(authUser.id, setLinkedTeens);
+    return () => unsub();
+  }, [authUser?.id, authUser?.emailVerified]);
+
+  const handleLinkTeenSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authUser?.id || !teenInviteInput.trim()) return;
+    setTeenLinkBusy(true);
+    setTeenLinkError(null);
+    setTeenLinkNotice(null);
+    try {
+      const created = await redeemStudentInviteCode(
+        authUser.id,
+        authUser.displayName ?? authUser.email ?? 'Parent',
+        teenInviteInput
+      );
+      setTeenInviteInput('');
+      setTeenLinkNotice(
+        isVi
+          ? `Đã liên kết chế độ chỉ xem với tài khoản tự học của ${created.studentName}.`
+          : `Linked in read-only observer mode with ${created.studentName}.`
+      );
+    } catch (err) {
+      setTeenLinkError(
+        err instanceof Error
+          ? err.message
+          : isVi
+            ? 'Không thể liên kết mã lúc này.'
+            : 'Unable to redeem link code right now.'
+      );
+    } finally {
+      setTeenLinkBusy(false);
+    }
+  };
+
+  const handleUnlinkTeen = async (linkId: string) => {
+    setTeenLinkBusy(true);
+    setTeenLinkError(null);
+    try {
+      await unlinkObserverLink(linkId);
+    } catch (err) {
+      setTeenLinkError(
+        err instanceof Error ? err.message : 'Unable to unlink student'
+      );
+    } finally {
+      setTeenLinkBusy(false);
+    }
+  };
 
   const loadPrivacy = useCallback(async () => {
     if (!authUser) {
@@ -1177,6 +1246,128 @@ export function ParentPanel({
               </p>
             )}
           </section>
+
+          {/* Linked Independent Teen Accounts (Middle & High School 12-18 · Read-Only Observer) */}
+          {authUser && (
+            <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-4">
+              <div className="space-y-1">
+                <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 inline-flex items-center gap-2">
+                  <Link2 className="w-5 h-5 text-accent shrink-0" aria-hidden="true" />
+                  <span>
+                    {isVi
+                      ? 'Theo dõi con Cấp 2–3 (Tài khoản độc lập)'
+                      : 'Linked Teen Students (Read-Only)'}
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  {isVi
+                    ? 'Khi con học THCS / THPT (12–18 tuổi) tự dùng tài khoản riêng, con có thể tạo mã 6 ký tự trong mục Tự học để ba mẹ xem tiến độ tại đây mà không can thiệp quyền riêng tư của con.'
+                    : 'Middle & High School students (12–18) own their own accounts and can share a 6-character code so you can view read-only study progress here.'}
+                </p>
+              </div>
+
+              <form onSubmit={handleLinkTeenSubmit} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  maxLength={6}
+                  value={teenInviteInput}
+                  onChange={(e) =>
+                    setTeenInviteInput(
+                      e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '')
+                    )
+                  }
+                  placeholder={isVi ? 'Nhập mã 6 ký tự (VD: AB3K9P)' : 'Enter 6-char code'}
+                  className="flex-1 min-h-[42px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 text-sm font-mono uppercase tracking-widest text-slate-900 dark:text-slate-100 placeholder:font-sans placeholder:tracking-normal"
+                />
+                <button
+                  type="submit"
+                  disabled={
+                    teenLinkBusy ||
+                    teenInviteInput.trim().length !== 6 ||
+                    authUser.emailVerified === false
+                  }
+                  className="px-4 py-2.5 min-h-[42px] rounded-xl btn-accent text-xs font-semibold disabled:opacity-50 whitespace-nowrap cursor-pointer"
+                >
+                  {isVi ? 'Liên kết' : 'Link'}
+                </button>
+              </form>
+
+              {teenLinkNotice && (
+                <p className="text-xs text-emerald-800 dark:text-emerald-200 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 rounded-lg px-3 py-2">
+                  {teenLinkNotice}
+                </p>
+              )}
+              {teenLinkError && (
+                <p className="text-xs text-rose-800 dark:text-rose-200 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 rounded-lg px-3 py-2">
+                  {teenLinkError}
+                </p>
+              )}
+
+              {linkedTeens.length > 0 && (
+                <div className="space-y-2.5 pt-1">
+                  {linkedTeens.map((teen) => (
+                    <div
+                      key={teen.linkId}
+                      className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/75 dark:bg-slate-950/70 p-3.5 space-y-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
+                            {teen.studentName}
+                          </p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                            {teen.ageYears} {isVi ? 'tuổi' : 'y'} ·{' '}
+                            {teen.gradeLevel > 0
+                              ? isVi
+                                ? `Lớp ${teen.gradeLevel}`
+                                : `Grade ${teen.gradeLevel}`
+                              : teen.ageBand}{' '}
+                            · {isVi ? 'Chỉ xem' : 'Read-only'}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={teenLinkBusy}
+                          onClick={() => void handleUnlinkTeen(teen.linkId)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:text-rose-600 hover:border-rose-300 cursor-pointer"
+                        >
+                          <Unlink className="w-3 h-3" aria-hidden="true" />
+                          <span>{isVi ? 'Hủy liên kết' : 'Unlink'}</span>
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-200/70 dark:border-slate-800 text-center tabular-nums">
+                        <div>
+                          <p className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                            {teen.completedLessonsCount}
+                          </p>
+                          <p className="text-[11px] text-slate-500">
+                            {isVi ? 'Bài xong' : 'Lessons'}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-sm font-bold text-amber-600 dark:text-amber-400">
+                            {teen.currentStreakDays} {isVi ? 'ngày' : 'd'}
+                          </p>
+                          <p className="text-[11px] text-slate-500">
+                            {isVi ? 'Chuỗi học' : 'Streak'}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-sm font-bold text-sky-600 dark:text-sky-400">
+                            {teen.dailyMinutesGoal}p
+                          </p>
+                          <p className="text-[11px] text-slate-500">
+                            {isVi ? 'Mục tiêu' : 'Goal'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
 
           {/* Weekly 7-Day Activity Calendar, KPI Insights, Streak & Shareable Summary */}
           <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-6 space-y-4 sm:space-y-5">

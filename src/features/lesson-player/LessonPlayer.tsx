@@ -30,6 +30,7 @@ import type {
 } from '../../../packages/contracts/types';
 import type { UiMessages } from '../../i18n/messages';
 import { apiClient } from '../../shared/apiClient';
+import { saveFirestoreProgress } from '../../shared/firestoreService';
 import { speakText, stopSpeaking } from '../../audio/speechPlayer';
 import { VoiceAccentControls } from '../../components/VoiceAccentControls';
 import {
@@ -89,6 +90,7 @@ interface LessonPlayerProps {
   onModeChange: (mode: ExperienceMode) => void;
   onOpenStory: () => void;
   onProgressUpdated: () => void;
+  accountUid?: string | null;
 }
 
 const PLAYABLE_MODES: ExperienceMode[] = [
@@ -113,6 +115,7 @@ export function LessonPlayer({
   onModeChange,
   onOpenStory,
   onProgressUpdated,
+  accountUid = null,
 }: LessonPlayerProps) {
   const isVi = learner.preferences.interfaceLocale === 'vi';
   const [lesson, setLesson] = useState<ResolvedLessonPayload | null>(null);
@@ -369,7 +372,14 @@ export function LessonPlayer({
       completed: isDone,
     };
     try {
-      await apiClient.saveProgress(lesson.lessonId, payload);
+      if (accountUid) {
+        await saveFirestoreProgress(accountUid, {
+          lessonId: lesson.lessonId,
+          ...payload,
+        });
+      } else {
+        await apiClient.saveProgress(lesson.lessonId, payload);
+      }
       setCheckpointSavedAt(new Date().toLocaleTimeString());
       onProgressUpdated();
     } catch {

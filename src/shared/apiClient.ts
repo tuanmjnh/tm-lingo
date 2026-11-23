@@ -57,7 +57,11 @@ export interface SupportedAIProviderMeta {
 // so staff admin requests remain authenticated even inside cross-origin iframes where third-party cookies are restricted.
 let inMemoryStaffAccessToken: string | null = null;
 
-async function buildHeaders(url: string, extra?: HeadersInit): Promise<Headers> {
+async function buildHeaders(
+  url: string,
+  extra?: HeadersInit,
+  forceRefreshParentToken = false
+): Promise<Headers> {
   const headers = new Headers(extra);
   // Dual Auth Isolation: never attach Firebase Parent Bearer token to /api/v1/admin/*
   const isStaffEndpoint = url.startsWith('/api/v1/admin/');
@@ -67,7 +71,7 @@ async function buildHeaders(url: string, extra?: HeadersInit): Promise<Headers> 
       headers.set('Authorization', `Bearer ${inMemoryStaffAccessToken}`);
     }
   } else {
-    const token = await getParentIdToken();
+    const token = await getParentIdToken(forceRefreshParentToken);
     if (token) {
       headers.set('Authorization', `Bearer ${token}`);
     }
@@ -76,18 +80,29 @@ async function buildHeaders(url: string, extra?: HeadersInit): Promise<Headers> 
 }
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const headers = await buildHeaders(url, init?.headers);
-  if (!(init?.body instanceof FormData) && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
-  }
-
   const isStaffEndpoint = url.startsWith('/api/v1/admin/');
-  const res = await fetch(url, {
-    ...init,
-    credentials: 'include',
-    ...(isStaffEndpoint ? { cache: 'no-store' as RequestCache } : {}),
-    headers,
-  });
+  const sendRequest = async (forceRefreshParentToken: boolean) => {
+    const headers = await buildHeaders(url, init?.headers, forceRefreshParentToken);
+    if (!(init?.body instanceof FormData) && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
+    return fetch(url, {
+      ...init,
+      credentials: 'include',
+      ...(isStaffEndpoint ? { cache: 'no-store' as RequestCache } : {}),
+      headers,
+    });
+  };
+
+  let res = await sendRequest(false);
+
+  // If a signed-in Firebase user hits 401 due to a stale/expired token, refresh once and retry
+  if (res.status === 401 && !isStaffEndpoint) {
+    const refreshedToken = await getParentIdToken(true);
+    if (refreshedToken) {
+      res = await sendRequest(true);
+    }
+  }
 
   if (isStaffEndpoint) {
     const refreshed = res.headers.get('X-Staff-Refreshed-Token')?.trim();

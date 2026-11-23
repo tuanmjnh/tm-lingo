@@ -31,6 +31,7 @@ import {
   Volume2,
 } from 'lucide-react';
 import type {
+  AccountType,
   AgeGroupConfig,
   AuthUserProfile,
   LearnerProfile,
@@ -40,6 +41,7 @@ import type {
 } from '../../../packages/contracts/types';
 import type { UiMessages } from '../../i18n/messages';
 import { apiClient } from '../../shared/apiClient';
+import { listAllFirestoreProgress } from '../../shared/firestoreService';
 import { speakText } from '../../audio/speechPlayer';
 import { LearningTipOfTheDay } from '../../components/LearningTipOfTheDay';
 import {
@@ -63,6 +65,7 @@ export type WorkspaceDestination =
 
 interface FamilyHomeDashboardProps {
   parentUser: AuthUserProfile;
+  accountType?: AccountType;
   learners: LearnerProfile[];
   activeLearner: LearnerProfile;
   ageGroups: AgeGroupConfig[];
@@ -220,6 +223,7 @@ function getBadgeToneClasses(
 
 export function FamilyHomeDashboard({
   parentUser,
+  accountType = 'parent',
   learners,
   activeLearner,
   ageGroups,
@@ -239,6 +243,7 @@ export function FamilyHomeDashboard({
   onOpenWordReview,
 }: FamilyHomeDashboardProps) {
   const isVi = interfaceLocale === 'vi';
+  const isStudentAccount = accountType === 'student';
   const [viewMode, setViewMode] = useState<'overview' | 'detail'>('overview');
   const [progressByLearner, setProgressByLearner] = useState<
     Record<string, LessonProgressRecord[]>
@@ -252,11 +257,30 @@ export function FamilyHomeDashboard({
     }));
   }, [activeLearner.id, activeLearnerProgress]);
 
-  // Fetch server progress for all family children so overview & detail tables are 100% accurate
+  // Fetch cloud progress for all profiles in the account
   const learnerIdsKey = learners.map((l) => l.id).join(',');
   useEffect(() => {
     let cancelled = false;
     if (learners.length === 0) return;
+    if (parentUser.provider === 'firebase' && parentUser.emailVerified !== false) {
+      void listAllFirestoreProgress(parentUser.id)
+        .then((allRecords) => {
+          if (cancelled) return;
+          const grouped: Record<string, LessonProgressRecord[]> = {};
+          for (const child of learners) {
+            grouped[child.id] = [];
+          }
+          for (const rec of allRecords) {
+            if (!grouped[rec.learnerId]) grouped[rec.learnerId] = [];
+            grouped[rec.learnerId].push(rec);
+          }
+          setProgressByLearner((prev) => ({ ...prev, ...grouped }));
+        })
+        .catch(() => undefined);
+      return () => {
+        cancelled = true;
+      };
+    }
     void Promise.all(
       learners.map(async (child) => {
         try {
@@ -280,7 +304,7 @@ export function FamilyHomeDashboard({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [learnerIdsKey]);
+  }, [learnerIdsKey, parentUser.id, parentUser.provider, parentUser.emailVerified]);
 
   const getLocaleName = (code: string) => {
     const match = languages.find((l) => l.locale === code);
@@ -479,26 +503,43 @@ export function FamilyHomeDashboard({
             <span className="capitalize">{todayFormatted}</span>
             <span aria-hidden="true">·</span>
             <span>
-              {learners.length}{' '}
-              {isVi ? 'hồ sơ bé đang theo dõi' : 'learner profiles'}
+              {isStudentAccount
+                ? getAgeGroupLabel(activeLearner)
+                : `${learners.length} ${isVi ? 'hồ sơ bé đang theo dõi' : 'learner profiles'}`}
             </span>
             <span aria-hidden="true">·</span>
             <span>
-              {isVi ? 'Đang chọn:' : 'Active:'}{' '}
-              <strong className="text-slate-800 dark:text-slate-100">
-                {activeLearner.nickname}
-              </strong>
+              {isStudentAccount
+                ? isVi
+                  ? 'Tài khoản tự học độc lập'
+                  : 'Independent self-study'
+                : isVi
+                  ? 'Đang chọn:'
+                  : 'Active:'}{' '}
+              {!isStudentAccount && (
+                <strong className="text-slate-800 dark:text-slate-100">
+                  {activeLearner.nickname}
+                </strong>
+              )}
             </span>
           </div>
           <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900 dark:text-slate-50 leading-tight">
-            {isVi
-              ? `Bảng điều khiển học tập, ${parentGreetingName}`
-              : `Family learning overview, ${parentGreetingName}`}
+            {isStudentAccount
+              ? isVi
+                ? `Xin chào, ${activeLearner.nickname}`
+                : `Welcome back, ${activeLearner.nickname}`
+              : isVi
+                ? `Bảng điều khiển học tập, ${parentGreetingName}`
+                : `Family learning overview, ${parentGreetingName}`}
           </h1>
           <p className="text-sm sm:text-base text-slate-600 dark:text-slate-400 max-w-2xl leading-relaxed">
-            {isVi
-              ? 'Theo dõi tiến độ học bài, danh hiệu đạt được, và quản lý khung giờ học bài – truyện kể độc lập với thư viện sách nói không giới hạn.'
-              : 'Track lesson milestones, earned titles, and separate daily time limits for lessons and picture stories alongside unlimited audiobooks.'}
+            {isStudentAccount
+              ? isVi
+                ? 'Theo dõi chuỗi ngày tự học, từ vựng cần ôn, mục tiêu mỗi ngày và kho sách nói học thuật không giới hạn.'
+                : 'Track your self-study streak, vocabulary review, daily goals, and unlimited audiobooks.'
+              : isVi
+                ? 'Theo dõi tiến độ học bài, danh hiệu đạt được, và quản lý khung giờ học bài – truyện kể độc lập với thư viện sách nói không giới hạn.'
+                : 'Track lesson milestones, earned titles, and separate daily time limits for lessons and picture stories alongside unlimited audiobooks.'}
           </p>
         </div>
 
@@ -678,7 +719,15 @@ export function FamilyHomeDashboard({
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap cursor-pointer"
               >
                 <UserPlus className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>{isVi ? 'Quản lý hồ sơ & khung giờ' : 'Manage profiles & limits'}</span>
+                <span>
+                  {isStudentAccount
+                    ? isVi
+                      ? 'Cài đặt tự học & Mã phụ huynh'
+                      : 'Self-study settings & Parent link'
+                    : isVi
+                      ? 'Quản lý hồ sơ & khung giờ'
+                      : 'Manage profiles & limits'}
+                </span>
               </button>
             </div>
 
