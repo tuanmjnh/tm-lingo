@@ -7,7 +7,7 @@
     "dev": "next dev",
     "dev:port": "next dev -p 5001",
     "build": "next build",
-    "start": "next start -p 5001",
+    "start": "next start",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
