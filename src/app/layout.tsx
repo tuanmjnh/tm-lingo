@@ -53,7 +53,10 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body className="bg-[#F6F8FB] text-[#0F172A] dark:bg-[#090E1A] dark:text-[#F1F5F9] antialiased">
+      <body
+        suppressHydrationWarning
+        className="bg-[#F6F8FB] text-[#0F172A] dark:bg-[#090E1A] dark:text-[#F1F5F9] antialiased"
+      >
         {children}
       </body>
     </html>

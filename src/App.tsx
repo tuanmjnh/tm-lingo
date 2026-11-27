@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import { AnimatePresence, motion } from 'motion/react';
 import {
   Award,
   BookOpen,
@@ -277,6 +278,8 @@ export function App({ initialTab = 'home' }: AppProps) {
   const [experienceMode, setExperienceMode] =
     useState<ExperienceMode>('guided');
   const [loading, setLoading] = useState(true);
+  const [minSplashElapsed, setMinSplashElapsed] = useState(false);
+  const [splashForceDismissed, setSplashForceDismissed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastSyncedCount, setLastSyncedCount] = useState(0);
   const [dailyUsedSeconds, setDailyUsedSeconds] = useState(0);
@@ -293,6 +296,16 @@ export function App({ initialTab = 'home' }: AppProps) {
   const [parentGateOpen, setParentGateOpen] = useState(false);
   const [parentGateUnlockedSession, setParentGateUnlockedSession] =
     useState(false);
+
+  // PWA initial splash timing (prevents flash, caps max wait at 2.4s)
+  useEffect(() => {
+    const minTimer = window.setTimeout(() => setMinSplashElapsed(true), 420);
+    const maxTimer = window.setTimeout(() => setSplashForceDismissed(true), 2400);
+    return () => {
+      window.clearTimeout(minTimer);
+      window.clearTimeout(maxTimer);
+    };
+  }, []);
 
   // Subscribe to Consumer Auth (Firebase)
   useEffect(() => {
@@ -1278,6 +1291,8 @@ export function App({ initialTab = 'home' }: AppProps) {
     kidFocusMode && activeTab === 'learn' && hasAuthenticatedWorkspace;
   const effectiveReducedMotion =
     appearance.reducedMotion || Boolean(activeLearner?.preferences.reducedMotion);
+  const showInitialSplash =
+    !splashForceDismissed && (loading || !minSplashElapsed);
 
   return (
     <div
@@ -1408,6 +1423,19 @@ export function App({ initialTab = 'home' }: AppProps) {
       )}
 
       <main className="flex-1 max-w-[1200px] w-full min-w-0 mx-auto px-3.5 sm:px-6 lg:px-8 py-5 sm:py-8 md:py-10 space-y-6 sm:space-y-8 md:space-y-10">
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={activeTab}
+            initial={effectiveReducedMotion ? false : { opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={effectiveReducedMotion ? undefined : { opacity: 0, y: -6 }}
+            transition={
+              effectiveReducedMotion
+                ? { duration: 0 }
+                : { duration: 0.24, ease: [0.22, 1, 0.36, 1] }
+            }
+            className="space-y-6 sm:space-y-8 md:space-y-10"
+          >
         {activeTab === 'admin' ? (
           staffUser ? (
             <AdminWorkspace
@@ -1434,7 +1462,8 @@ export function App({ initialTab = 'home' }: AppProps) {
             />
           ) : staffChecking ? (
             <AppLoadingScreen
-              compact
+              variant="page"
+              locale={currentInterfaceLocale}
               subtitle={
                 isVi
                   ? 'Đang khôi phục phiên quản trị...'
@@ -1461,7 +1490,8 @@ export function App({ initialTab = 'home' }: AppProps) {
           />
         ) : loading ? (
           <AppLoadingScreen
-            compact
+            variant="page"
+            locale={currentInterfaceLocale}
             subtitle={
               isVi
                 ? 'Đang tải hồ sơ và lộ trình học phù hợp...'
@@ -2284,6 +2314,8 @@ export function App({ initialTab = 'home' }: AppProps) {
               ))}
           </>
         )}
+          </motion.div>
+        </AnimatePresence>
       </main>
 
       {!isFocusStage && (
@@ -2455,6 +2487,17 @@ export function App({ initialTab = 'home' }: AppProps) {
         locale={currentInterfaceLocale}
         lastSyncedCount={lastSyncedCount}
       />
+
+      <AnimatePresence>
+        {showInitialSplash && (
+          <AppLoadingScreen
+            key="pwa-splash"
+            variant="splash"
+            phase="workspace"
+            locale={currentInterfaceLocale}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
